@@ -1,41 +1,36 @@
 /*
     SDL - Simple DirectMedia Layer
-    Copyright (C) 1997-2004 Sam Lantinga
+    Copyright (C) 1997-2012 Sam Lantinga
 
     This library is free software; you can redistribute it and/or
-    modify it under the terms of the GNU Library General Public
+    modify it under the terms of the GNU Lesser General Public
     License as published by the Free Software Foundation; either
-    version 2 of the License, or (at your option) any later version.
+    version 2.1 of the License, or (at your option) any later version.
 
     This library is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-    Library General Public License for more details.
+    Lesser General Public License for more details.
 
-    You should have received a copy of the GNU Library General Public
-    License along with this library; if not, write to the Free
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
     Sam Lantinga
     slouken@libsdl.org
 */
+#include "SDL_config.h"
 
-#ifdef SAVE_RCSID
-static char rcsid =
- "@(#) $Id: SDL_ph_image.c,v 1.17 2004/02/14 20:22:20 slouken Exp $";
-#endif
-
-#include <stdlib.h>
 #include <Ph.h>
 #include <photon/Pg.h>
 
-#include "SDL.h"
-#include "SDL_error.h"
 #include "SDL_endian.h"
 #include "SDL_video.h"
-#include "SDL_pixels_c.h"
+#include "../SDL_pixels_c.h"
+#include "SDL_ph_video.h"
 #include "SDL_ph_image_c.h"
 #include "SDL_ph_modes_c.h"
+#include "SDL_ph_gl.h"
 
 int ph_SetupImage(_THIS, SDL_Surface *screen)
 {
@@ -79,7 +74,7 @@ int ph_SetupImage(_THIS, SDL_Surface *screen)
     if ((bpp==8) && (desktoppal==SDLPH_PAL_EMULATE))
     {
         /* creating image palette */
-        palette=malloc(_Pg_MAX_PALETTE*sizeof(PgColor_t));
+        palette=SDL_malloc(_Pg_MAX_PALETTE*sizeof(PgColor_t));
         if (palette==NULL)
         {
             SDL_SetError("ph_SetupImage(): can't allocate memory for palette !\n");
@@ -91,7 +86,7 @@ int ph_SetupImage(_THIS, SDL_Surface *screen)
         if ((SDL_Image = PhCreateImage(NULL, screen->w, screen->h, type, palette, _Pg_MAX_PALETTE, 1)) == NULL)
         {
             SDL_SetError("ph_SetupImage(): PhCreateImage() failed for bpp=8 !\n");
-            free(palette);
+            SDL_free(palette);
             return -1;
         }
     }
@@ -152,8 +147,7 @@ int ph_SetupOCImage(_THIS, SDL_Surface *screen)
                 break;
     }
 
-    /* Currently only offscreen contexts with the same bit depth as the
-     * display can be created. */
+    /* Currently offscreen contexts with the same bit depth as display bpp only can be created */
     OCImage.offscreen_context = PdCreateOffscreenContext(0, screen->w, screen->h, Pg_OSC_MEM_PAGE_ALIGN);
 
     if (OCImage.offscreen_context == NULL)
@@ -190,8 +184,8 @@ int ph_SetupFullScreenImage(_THIS, SDL_Surface* screen)
 {
     OCImage.flags = screen->flags;
 
-    /* Begin direct mode */
-    if (!ph_EnterFullScreen(this, screen))
+    /* Begin direct and fullscreen mode */
+    if (!ph_EnterFullScreen(this, screen, PH_ENTER_DIRECTMODE))
     {
         return -1;
     }
@@ -257,11 +251,11 @@ int ph_SetupFullScreenImage(_THIS, SDL_Surface* screen)
            
            for (i=0; i<40; i++)
            {
-              memset(screen->pixels+screen->pitch*i, 0x00, screen->pitch);
+              SDL_memset(screen->pixels+screen->pitch*i, 0x00, screen->pitch);
            }
            for (i=440; i<480; i++)
            {
-              memset(screen->pixels+screen->pitch*i, 0x00, screen->pitch);
+              SDL_memset(screen->pixels+screen->pitch*i, 0x00, screen->pitch);
            }
            screen->pixels+=screen->pitch*40;
         }
@@ -281,11 +275,11 @@ int ph_SetupFullScreenImage(_THIS, SDL_Surface* screen)
            
            for (i=0; i<40; i++)
            {
-              memset(screen->pixels+screen->pitch*i, 0x00, screen->pitch);
+              SDL_memset(screen->pixels+screen->pitch*i, 0x00, screen->pitch);
            }
            for (i=440; i<480; i++)
            {
-              memset(screen->pixels+screen->pitch*i, 0x00, screen->pitch);
+              SDL_memset(screen->pixels+screen->pitch*i, 0x00, screen->pitch);
            }
            screen->pixels+=screen->pitch*40;
         }
@@ -300,121 +294,68 @@ int ph_SetupFullScreenImage(_THIS, SDL_Surface* screen)
     return 0;
 }
 
-#ifdef HAVE_OPENGL
-
-static int ph_SetupOpenGLContext(_THIS, int width, int height, int bpp, Uint32 flags)
-{
-    PhDim_t dim;
-    uint64_t OGLAttrib[PH_OGL_MAX_ATTRIBS];
-    int exposepost=0;
-    int OGLargc;
-
-    dim.w=width;
-    dim.h=height;
-    
-    if ((oglctx!=NULL) && (oglflags==flags) && (oglbpp==bpp))
-    {
-       PdOpenGLContextResize(oglctx, &dim);
-       PhDCSetCurrent(oglctx);
-       return 0;
-    }
-    else
-    {
-       if (oglctx!=NULL)
-       {
-          PhDCSetCurrent(NULL);
-          PhDCRelease(oglctx);
-          oglctx=NULL;
-          exposepost=1;
-       }
-    }
-
-    OGLargc=0;
-    if (this->gl_config.depth_size)
-    {
-        OGLAttrib[OGLargc++]=PHOGL_ATTRIB_DEPTH_BITS;
-        OGLAttrib[OGLargc++]=this->gl_config.depth_size;
-    }
-    if (this->gl_config.stencil_size)
-    {
-        OGLAttrib[OGLargc++]=PHOGL_ATTRIB_STENCIL_BITS;
-        OGLAttrib[OGLargc++]=this->gl_config.stencil_size;
-    }
-    OGLAttrib[OGLargc++]=PHOGL_ATTRIB_FORCE_SW;
-    if (flags & SDL_FULLSCREEN)
-    {
-        OGLAttrib[OGLargc++]=PHOGL_ATTRIB_FULLSCREEN;
-        OGLAttrib[OGLargc++]=PHOGL_ATTRIB_DIRECT;
-        OGLAttrib[OGLargc++]=PHOGL_ATTRIB_FULLSCREEN_BEST;
-        OGLAttrib[OGLargc++]=PHOGL_ATTRIB_FULLSCREEN_CENTER;
-    }
-    OGLAttrib[OGLargc++]=PHOGL_ATTRIB_NONE;
-
-    if (this->gl_config.double_buffer)
-    {
-        oglctx=PdCreateOpenGLContext(2, &dim, 0, OGLAttrib);
-    }
-    else
-    {
-        oglctx=PdCreateOpenGLContext(1, &dim, 0, OGLAttrib);
-    }
-
-    if (oglctx==NULL)
-    {
-        SDL_SetError("ph_SetupOpenGLContext(): cannot create OpenGL context !\n");
-        return (-1);
-    }
-
-    PhDCSetCurrent(oglctx);
-
-    PtFlush();
-
-    oglflags=flags;
-    oglbpp=bpp;
-
-    if (exposepost!=0)
-    {
-        /* OpenGL context has been recreated, so report about this fact */
-        SDL_PrivateExpose();
-    }
-
-    return 0;
-}
+#if SDL_VIDEO_OPENGL
 
 int ph_SetupOpenGLImage(_THIS, SDL_Surface* screen)
 {
-   this->UpdateRects = ph_OpenGLUpdate;
-   screen->pixels=NULL;
-   screen->pitch=NULL;
+    this->UpdateRects = ph_OpenGLUpdate;
+    screen->pixels=NULL;
+    screen->pitch=NULL;
 
-   if (ph_SetupOpenGLContext(this, screen->w, screen->h, screen->format->BitsPerPixel, screen->flags)!=0)
-   {
-      screen->flags &= ~SDL_OPENGL;
-      return -1;
-   }
+    #if (_NTO_VERSION >= 630)
+        if ((screen->flags & SDL_FULLSCREEN) == SDL_FULLSCREEN)
+        {
+            if (!ph_EnterFullScreen(this, screen, PH_IGNORE_DIRECTMODE))
+            {
+                screen->flags &= ~SDL_FULLSCREEN;
+                return -1;
+            }
+        }
+    #endif /* 6.3.0 */
+
+    if (ph_SetupOpenGLContext(this, screen->w, screen->h, screen->format->BitsPerPixel, screen->flags)!=0)
+    {
+        screen->flags &= ~SDL_OPENGL;
+        return -1;
+    }
    
-   return 0;
+    return 0;
 }
 
-#endif /* HAVE_OPENGL */
+#endif /* SDL_VIDEO_OPENGL */
 
 void ph_DestroyImage(_THIS, SDL_Surface* screen)
 {
 
-#ifdef HAVE_OPENGL
+#if SDL_VIDEO_OPENGL
     if ((screen->flags & SDL_OPENGL)==SDL_OPENGL)
     {
         if (oglctx)
         {
-            PhDCSetCurrent(NULL);
-            PhDCRelease(oglctx);
+            #if (_NTO_VERSION < 630)
+                PhDCSetCurrent(NULL);
+                PhDCRelease(oglctx);
+            #else
+                qnxgl_context_destroy(oglctx);
+                qnxgl_buffers_destroy(oglbuffers);
+                qnxgl_finish();
+            #endif /* 6.3.0 */
             oglctx=NULL;
+            oglbuffers=NULL;
             oglflags=0;
             oglbpp=0;
         }
+
+        #if (_NTO_VERSION >= 630)
+            if (currently_fullscreen)
+            {
+                ph_LeaveFullScreen(this);
+            }
+        #endif /* 6.3.0 */
+
         return;
     }
-#endif /* HAVE_OPENGL */
+#endif /* SDL_VIDEO_OPENGL */
 
     if (currently_fullscreen)
     {
@@ -447,10 +388,10 @@ void ph_DestroyImage(_THIS, SDL_Surface* screen)
         /* if palette allocated, free it */
         if (SDL_Image->palette)
         {
-            free(SDL_Image->palette);
+            SDL_free(SDL_Image->palette);
         }
         PgShmemDestroy(SDL_Image->image);
-        free(SDL_Image);
+        SDL_free(SDL_Image);
     }
 
     /* Must be zeroed everytime */
@@ -482,24 +423,57 @@ int ph_UpdateHWInfo(_THIS)
         return -1;
     }
 
-    this->info.blit_hw = 1;
-
-    if ((vmode.mode_capabilities2 & PgVM_MODE_CAP2_ALPHA_BLEND) == PgVM_MODE_CAP2_ALPHA_BLEND)
+    if ((vmode.mode_capabilities1 & PgVM_MODE_CAP1_OFFSCREEN) == PgVM_MODE_CAP1_OFFSCREEN)
     {
-       this->info.blit_hw_A = 1;
+        /* this is a special test for drivers which tries to lie about offscreen capability */
+        if (hwcaps.currently_available_video_ram!=0)
+        {
+           this->info.hw_available = 1;
+        }
+        else
+        {
+           this->info.hw_available = 0;
+        }
     }
     else
     {
-       this->info.blit_hw_A = 0;
+        this->info.hw_available = 0;
+    }
+
+    if ((vmode.mode_capabilities2 & PgVM_MODE_CAP2_RECTANGLE) == PgVM_MODE_CAP2_RECTANGLE)
+    {
+        this->info.blit_fill = 1;
+    }
+    else
+    {
+        this->info.blit_fill = 0;
+    }
+
+    if ((vmode.mode_capabilities2 & PgVM_MODE_CAP2_BITBLT) == PgVM_MODE_CAP2_BITBLT)
+    {
+        this->info.blit_hw = 1;
+    }
+    else
+    {
+        this->info.blit_hw = 0;
+    }
+
+    if ((vmode.mode_capabilities2 & PgVM_MODE_CAP2_ALPHA_BLEND) == PgVM_MODE_CAP2_ALPHA_BLEND)
+    {
+        this->info.blit_hw_A = 1;
+    }
+    else
+    {
+        this->info.blit_hw_A = 0;
     }
     
     if ((vmode.mode_capabilities2 & PgVM_MODE_CAP2_CHROMA) == PgVM_MODE_CAP2_CHROMA)
     {
-       this->info.blit_hw_CC = 1;
+        this->info.blit_hw_CC = 1;
     }
     else
     {
-       this->info.blit_hw_CC = 0;
+        this->info.blit_hw_CC = 0;
     }
     
     return 0;
@@ -511,14 +485,14 @@ int ph_SetupUpdateFunction(_THIS, SDL_Surface* screen, Uint32 flags)
 
     ph_DestroyImage(this, screen);
     
-#ifdef HAVE_OPENGL
+#if SDL_VIDEO_OPENGL
     if ((flags & SDL_OPENGL)==SDL_OPENGL)
     {
         setupresult=ph_SetupOpenGLImage(this, screen);
     }
     else
     {
-#endif /* HAVE_OPENGL */
+#endif
        if ((flags & SDL_FULLSCREEN)==SDL_FULLSCREEN)
        {
            setupresult=ph_SetupFullScreenImage(this, screen);
@@ -534,9 +508,9 @@ int ph_SetupUpdateFunction(_THIS, SDL_Surface* screen, Uint32 flags)
               setupresult=ph_SetupImage(this, screen);
           }
        }
-#ifdef HAVE_OPENGL
+#if SDL_VIDEO_OPENGL
     }
-#endif /* HAVE_OPENGL */
+#endif
     if (setupresult!=-1)
     {
        ph_UpdateHWInfo(this);
@@ -554,8 +528,8 @@ int ph_AllocHWSurface(_THIS, SDL_Surface* surface)
        SDL_SetError("ph_AllocHWSurface(): hwdata already exists!\n");
        return -1;
     }
-    surface->hwdata=malloc(sizeof(struct private_hwdata));
-    memset(surface->hwdata, 0x00, sizeof(struct private_hwdata));
+    surface->hwdata=SDL_malloc(sizeof(struct private_hwdata));
+    SDL_memset(surface->hwdata, 0x00, sizeof(struct private_hwdata));
     surface->hwdata->offscreenctx=PdCreateOffscreenContext(0, surface->w, surface->h, Pg_OSC_MEM_PAGE_ALIGN);
     if (surface->hwdata->offscreenctx == NULL)
     {
@@ -624,7 +598,7 @@ void ph_FreeHWSurface(_THIS, SDL_Surface* surface)
 
     PhDCRelease(surface->hwdata->offscreenctx);
     
-    free(surface->hwdata);
+    SDL_free(surface->hwdata);
     surface->hwdata=NULL;
 
     /* Update video ram amount */
@@ -747,6 +721,11 @@ int ph_FillHWRect(_THIS, SDL_Surface* surface, SDL_Rect* rect, Uint32 color)
     PgColor_t oldcolor;
     Uint32 truecolor;
     int ydisp=0;
+
+    if (this->info.blit_fill!=1)
+    {
+       return -1;
+    }
 
     truecolor=ph_ExpandColor(this, surface, color);
     if (truecolor==0xFFFFFFFFUL)
@@ -885,6 +864,12 @@ int ph_HWAccelBlit(SDL_Surface* src, SDL_Rect* srcrect, SDL_Surface* dst, SDL_Re
             PgChromaOn();
         }
 
+        if ((src->flags & SDL_SRCALPHA) == SDL_SRCALPHA)
+        {
+            ph_SetHWAlpha(this, src, src->format->alpha);
+            PgAlphaOn();
+        }
+
         if (dst == this->screen)
         {
             if (src == this->screen)
@@ -916,6 +901,11 @@ int ph_HWAccelBlit(SDL_Surface* src, SDL_Rect* srcrect, SDL_Surface* dst, SDL_Re
             }
         }
 
+        if ((src->flags & SDL_SRCALPHA) == SDL_SRCALPHA)
+        {
+            PgAlphaOff();
+        }
+
         if ((src->flags & SDL_SRCCOLORKEY) == SDL_SRCCOLORKEY)
         {
             PgChromaOff();
@@ -935,6 +925,11 @@ int ph_HWAccelBlit(SDL_Surface* src, SDL_Rect* srcrect, SDL_Surface* dst, SDL_Re
 
 int ph_SetHWColorKey(_THIS, SDL_Surface *surface, Uint32 key)
 {
+    if (this->info.blit_hw_CC!=1)
+    {
+       return -1;
+    }
+
     if (surface->hwdata!=NULL)
     {
         surface->hwdata->colorkey=ph_ExpandColor(this, surface, key);
@@ -950,17 +945,24 @@ int ph_SetHWColorKey(_THIS, SDL_Surface *surface, Uint32 key)
 
 int ph_SetHWAlpha(_THIS, SDL_Surface* surface, Uint8 alpha)
 {
-    return -1;
+    if (this->info.blit_hw_A!=1)
+    {
+       return -1;
+    }
+
+    PgSetAlphaBlend(NULL, alpha);
+
+    return 0;
 }
 
-#ifdef HAVE_OPENGL
+#if SDL_VIDEO_OPENGL
 void ph_OpenGLUpdate(_THIS, int numrects, SDL_Rect* rects)
 {
    this->GL_SwapBuffers(this);
    
    return;
 }
-#endif /* HAVE_OPENGL */
+#endif /* SDL_VIDEO_OPENGL */
 
 void ph_NormalUpdate(_THIS, int numrects, SDL_Rect *rects)
 {

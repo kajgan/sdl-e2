@@ -8,7 +8,7 @@
 /* Updated 5/03/00    - Added copyright and placed into PD. No code changes   */
 /* Updated 8/01/00    - Made "Carbon-compatible" by replacing LMGetTicks()    */
 
-/* This file is Copyright (C) Matt Slot, 1999-2000. It is hereby placed into 
+/* This file is Copyright (C) Matt Slot, 1999-2012. It is hereby placed into 
    the public domain. The author makes no warranty as to fitness or stability */
 
 #include <Gestalt.h>
@@ -18,6 +18,11 @@
 #include <Timer.h>
 
 #include "FastTimes.h"
+
+#ifdef TARGET_CPU_PPC
+#undef GENERATINGPOWERPC /* stop whining */
+#define GENERATINGPOWERPC TARGET_CPU_PPC
+#endif
 
 /* **** **** **** **** **** **** **** **** **** **** **** **** **** **** **** */
 /* **** **** **** **** **** **** **** **** **** **** **** **** **** **** **** */
@@ -66,7 +71,7 @@
 #define WideTo64bit(w)	(*(UInt64 *) &(w))
 
 /* LMGetTicks() is not in Carbon and TickCount() has a fair bit of overhead,
-   so for speed we always read lowmem directly. This is a MacOS X no-no, but 
+   so for speed we always read lowmem directly. This is a Mac OS X no-no, but 
    it always work on those systems that don't have a native Time Manager (ie,
    anything before MacOS 9) -- regardless whether we are in Carbon or not! */
 #define MyLMGetTicks()	(*(volatile UInt32 *) 0x16A)

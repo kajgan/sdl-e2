@@ -1,29 +1,24 @@
 /*
     SDL - Simple DirectMedia Layer
-    Copyright (C) 1997, 1998, 1999, 2000, 2001, 2002  Sam Lantinga
+    Copyright (C) 1997-2012 Sam Lantinga
 
     This library is free software; you can redistribute it and/or
-    modify it under the terms of the GNU Library General Public
+    modify it under the terms of the GNU Lesser General Public
     License as published by the Free Software Foundation; either
-    version 2 of the License, or (at your option) any later version.
+    version 2.1 of the License, or (at your option) any later version.
 
     This library is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-    Library General Public License for more details.
+    Lesser General Public License for more details.
 
-    You should have received a copy of the GNU Library General Public
-    License along with this library; if not, write to the Free
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
     Sam Lantinga
     slouken@libsdl.org
 */
-
-#ifdef SAVE_RCSID
-static char rcsid =
- "@(#) $Id: SDL_xbiosinterrupt.S,v 1.2 2004/02/14 10:12:27 pmandin Exp $";
-#endif
 
 /*
  *	XBIOS mouse & joystick vectors
@@ -38,6 +33,7 @@ static char rcsid =
 	.globl	_SDL_AtariXbios_MouseVector
 	.globl	_SDL_AtariXbios_JoystickVector
 
+	.globl	_SDL_AtariXbios_mouselock
 	.globl	_SDL_AtariXbios_mouseb
 	.globl	_SDL_AtariXbios_mousex
 	.globl	_SDL_AtariXbios_mousey
@@ -57,7 +53,12 @@ _SDL_AtariXbios_Install:
 	clrl	oldmousevector
 	movel	sp@(8),d0
 	beqs	no_new_mouse_vector
+#if defined(__mcoldfire__)
+	movel	a0@(16),d1
+	movel	d1,oldmousevector
+#else
 	movel	a0@(16),oldmousevector
+#endif
 	movel	d0,a0@(16)
 no_new_mouse_vector:
 
@@ -66,7 +67,12 @@ no_new_mouse_vector:
 	clrl	oldjoystickvector
 	movel	sp@(12),d0
 	beqs	no_new_joystick_vector
+#if defined(__mcoldfire__)
+	movel	a0@(24),d1
+	movel	d1,oldjoystickvector
+#else
 	movel	a0@(24),oldjoystickvector
+#endif
 	movel	d0,a0@(24)
 no_new_joystick_vector:
 
@@ -113,36 +119,67 @@ no_restore_joystick:
 	.ascii "LSDL"
 	.comm	oldmousevector,4*1
 _SDL_AtariXbios_MouseVector:
-	moveml	d0/a1,sp@-
+#if defined(__mcoldfire__)
+	lea	sp@(-8),sp
+	moveml	d0-d1,sp@
+#else
+	movel	d0,sp@-
+#endif
 
 	/* Mouse buttons */
 	moveb	(a0),d0
+#if defined(__mcoldfire__)
+	andl	#3,d0
+#else
 	andw	#3,d0
+#endif
 	movew	d0,_SDL_AtariXbios_mouseb
 
 	/* X movement */
 	moveb	a0@(1),d0
 	extw	d0
+#if defined(__mcoldfire__)
+	movew	_SDL_AtariXbios_mousex,d1
+	addl	d1,d0
+	movew	d0,_SDL_AtariXbios_mousex
+#else
 	addw	d0,_SDL_AtariXbios_mousex
+#endif
 
 	/* Y movement */
 	moveb	a0@(2),d0
 	extw	d0
+#if defined(__mcoldfire__)
+	movew	_SDL_AtariXbios_mousey,d1
+	addl	d1,d0
+	movew	d0,_SDL_AtariXbios_mousey
+#else
 	addw	d0,_SDL_AtariXbios_mousey
+#endif
+
+	/* Lock mouse position ? */
+	tstw	_SDL_AtariXbios_mouselock
+	beq.s	no_mouse_lock
+	clrb	a0@(1)
+	clrb	a0@(2)
+no_mouse_lock:
 
 	/* Jump through old vector */
-	movel	oldmousevector,a1
-	jsr	(a1)
+#if defined(__mcoldfire__)
+	moveml	sp@,d0-d1
+	lea	sp@(8),sp
+#else
+	movel	sp@+,d0
+#endif
 
-	moveml	sp@+,d0/a1
+	movel	oldmousevector,sp@-
 	rts
 
 	.data
 	.even
+	.comm	_SDL_AtariXbios_mouselock,2*1
 	.comm	_SDL_AtariXbios_mousex,2*1
-	.even
 	.comm	_SDL_AtariXbios_mousey,2*1
-	.even
 	.comm	_SDL_AtariXbios_mouseb,2*1
 
 /*--- Our joystick vector ---*/
@@ -153,18 +190,21 @@ _SDL_AtariXbios_MouseVector:
 	.ascii "LSDL"
 	.comm	oldjoystickvector,4*1
 _SDL_AtariXbios_JoystickVector:
-	moveml	d0/a1,sp@-
+	movel	d0,sp@-
 
 	/* New joystick state */
-	moveb	a0@(1),d0
+	moveb	a0@(2),d0
+#if defined(__mcoldfire__)
+	andl	#0x8f,d0
+#else
 	andw	#0x8f,d0
+#endif
 	movew	d0,_SDL_AtariXbios_joystick
 
 	/* Jump through old vector */
-	movel	oldjoystickvector,a1
-	jsr	(a1)
+	movel	sp@+,d0
 
-	moveml	sp@+,d0/a1
+	movel	oldjoystickvector,sp@-
 	rts
 
 	.data

@@ -1,35 +1,36 @@
 /*
     SDL - Simple DirectMedia Layer
-    Copyright (C) 1997-2004 Sam Lantinga
+    Copyright (C) 1997-2012 Sam Lantinga
 
     This library is free software; you can redistribute it and/or
-    modify it under the terms of the GNU Library General Public
+    modify it under the terms of the GNU Lesser General Public
     License as published by the Free Software Foundation; either
-    version 2 of the License, or (at your option) any later version.
+    version 2.1 of the License, or (at your option) any later version.
 
     This library is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-    Library General Public License for more details.
+    Lesser General Public License for more details.
 
-    You should have received a copy of the GNU Library General Public
-    License along with this library; if not, write to the Free
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
     Sam Lantinga
     slouken@libsdl.org
 */
-
-#ifdef SAVE_RCSID
-static char rcsid =
- "@(#) $Id: SDL_gemvideo.h,v 1.5 2004/01/04 16:49:25 slouken Exp $";
-#endif
+#include "SDL_config.h"
 
 #ifndef _SDL_gemvideo_h
 #define _SDL_gemvideo_h
 
-#include "SDL_sysvideo.h"
 #include "SDL_mutex.h"
+#include "../SDL_sysvideo.h"
+
+/* The implementation dependent data for the window manager cursor */
+struct WMcursor {
+	MFORM *mform_p;
+};
 
 /* Hidden "this" pointer for the video functions */
 #define _THIS	SDL_VideoDevice *this
@@ -48,13 +49,13 @@ void GEM_wind_redraw(_THIS, int winhandle, short *inside);
 
 struct SDL_PrivateVideoData {
 	Uint16	buf2scr_ops;		/* Operations to get buffer to screen */
-    void *buffer1;				/* Our shadow buffers */
+	void *buffer1;				/* Our shadow buffers */
 	void *buffer2;
 
 	/* VDI infos */
 	short vdi_handle;			/* VDI handle */
 	short full_w, full_h;		/* Fullscreen size */
-    short bpp;					/* Colour depth */
+	short bpp;					/* Colour depth */
 	short pixelsize;			/* Bytes per pixel */
 	short old_numcolors;		/* Number of colors in saved palette */
 	Uint16 pitch;				/* Line length */
@@ -65,6 +66,9 @@ struct SDL_PrivateVideoData {
 	short	blit_coords[8];		/* Coordinates for bitblt */
 	MFDB	src_mfdb, dst_mfdb;	/* VDI MFDB for bitblt */
 	Uint16 old_palette[256][3];	/* Saved current palette */
+	Uint16 cur_palette[256][3];	/* SDL application palette */
+								/* Function to set/restore palette */
+	void (*setpalette)(_THIS, Uint16 newpal[256][3]);
 
 	/* GEM infos */
 	short desk_x, desk_y;		/* Desktop properties */
@@ -79,7 +83,13 @@ struct SDL_PrivateVideoData {
 	SDL_bool window_fulled;		/* Window maximized ? */
 	SDL_bool mouse_relative;	/* Report relative mouse movement */
 	SDL_bool locked;			/* AES locked for fullscreen ? */
+	SDL_bool lock_redraw;		/* Prevent redraw till buffers are setup */
 	short message[8];			/* To self-send an AES message */
+	void *menubar;				/* Menu bar save buffer when going fullscreen */
+	SDL_bool use_dev_mouse;		/* Use /dev/mouse ? */
+	WMcursor *cursor;			/* To restore cursor when leaving/entering window */
+
+	SDL_bool fullscreen;		/* Fullscreen or windowed mode ? */
 	SDL_Rect *SDL_modelist[SDL_NUMMODES+1];	/* Mode list */
 	SDL_Surface *icon;			/* The icon */
 };
@@ -92,6 +102,8 @@ struct SDL_PrivateVideoData {
 #define VDI_pixelsize		(this->hidden->pixelsize)
 #define VDI_oldnumcolors	(this->hidden->old_numcolors)
 #define VDI_oldpalette		(this->hidden->old_palette)
+#define VDI_curpalette		(this->hidden->cur_palette)
+#define VDI_setpalette		(this->hidden->setpalette)
 #define VDI_pitch			(this->hidden->pitch)
 #define VDI_format			(this->hidden->format)
 #define VDI_screen			(this->hidden->screen)
@@ -118,9 +130,14 @@ struct SDL_PrivateVideoData {
 #define GEM_win_fulled		(this->hidden->window_fulled)
 #define GEM_mouse_relative	(this->hidden->mouse_relative)
 #define GEM_locked			(this->hidden->locked)
+#define GEM_lock_redraw		(this->hidden->lock_redraw)
 #define GEM_message			(this->hidden->message)
 #define SDL_modelist		(this->hidden->SDL_modelist)
 #define GEM_icon			(this->hidden->icon)
+#define GEM_fullscreen		(this->hidden->fullscreen)
+#define GEM_menubar			(this->hidden->menubar)
+#define GEM_usedevmouse		(this->hidden->use_dev_mouse)
+#define GEM_cursor			(this->hidden->cursor)
 
 #define GEM_buffer1			(this->hidden->buffer1)
 #define GEM_buffer2			(this->hidden->buffer2)

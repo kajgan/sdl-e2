@@ -1,29 +1,25 @@
 /*
     SDL - Simple DirectMedia Layer
-    Copyright (C) 1997-2004 Sam Lantinga
+    Copyright (C) 1997-2012 Sam Lantinga
 
     This library is free software; you can redistribute it and/or
-    modify it under the terms of the GNU Library General Public
+    modify it under the terms of the GNU Lesser General Public
     License as published by the Free Software Foundation; either
-    version 2 of the License, or (at your option) any later version.
+    version 2.1 of the License, or (at your option) any later version.
 
     This library is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-    Library General Public License for more details.
+    Lesser General Public License for more details.
 
-    You should have received a copy of the GNU Library General Public
-    License along with this library; if not, write to the Free
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
     Sam Lantinga
     slouken@libsdl.org
 */
-
-#ifdef SAVE_RCSID
-static char rcsid =
- "@(#) $Id: SDL_gemwm.c,v 1.5 2004/01/04 16:49:25 slouken Exp $";
-#endif
+#include "SDL_config.h"
 
 /*
 	GEM SDL video driver
@@ -38,8 +34,6 @@ static char rcsid =
 #include "SDL_gemwm_c.h"
 
 /* Defines */
-
-#define DEBUG_VIDEO_GEM 0
 
 #define ICONWIDTH 64
 #define ICONHEIGHT 64
@@ -64,15 +58,8 @@ void GEM_SetIcon(_THIS, SDL_Surface *icon, Uint8 *mask)
 	SDL_Surface *sicon;
 	SDL_Rect bounds;
 
-#ifdef DEBUG_VIDEO_GEM
-	printf("sdl:video:gem: SetIcon(0x%08x)\n", (long) icon);
-#endif
-
 #if 0
 	if ((GEM_wfeatures & (1<<WF_ICONIFY))==0) {
-#ifdef DEBUG_VIDEO_GEM
-		printf("sdl:video:gem: AES can not iconify windows\n");
-#endif
 		return;
 	}
 #endif
@@ -98,10 +85,6 @@ void GEM_SetIcon(_THIS, SDL_Surface *icon, Uint8 *mask)
 	}
 
 	GEM_icon = sicon;
-
-#ifdef DEBUG_VIDEO_GEM
-	printf("sdl:video:gem: SetIcon(): done\n");
-#endif
 }
 
 int GEM_IconifyWindow(_THIS)
@@ -125,5 +108,9 @@ int GEM_IconifyWindow(_THIS)
 
 SDL_GrabMode GEM_GrabInput(_THIS, SDL_GrabMode mode)
 {
+	if (this->screen == NULL) {
+		return SDL_GRAB_OFF;
+	}
+
 	return mode;
 }

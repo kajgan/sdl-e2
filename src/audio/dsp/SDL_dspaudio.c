@@ -1,35 +1,33 @@
 /*
     SDL - Simple DirectMedia Layer
-    Copyright (C) 1997-2004 Sam Lantinga
+    Copyright (C) 1997-2012 Sam Lantinga
 
     This library is free software; you can redistribute it and/or
-    modify it under the terms of the GNU Library General Public
+    modify it under the terms of the GNU Lesser General Public
     License as published by the Free Software Foundation; either
-    version 2 of the License, or (at your option) any later version.
+    version 2.1 of the License, or (at your option) any later version.
 
     This library is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-    Library General Public License for more details.
+    Lesser General Public License for more details.
 
-    You should have received a copy of the GNU Library General Public
-    License along with this library; if not, write to the Free
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
     Sam Lantinga
     slouken@libsdl.org
-*/
 
-#ifdef SAVE_RCSID
-static char rcsid =
- "@(#) $Id: SDL_dspaudio.c,v 1.12 2004/01/04 16:49:14 slouken Exp $";
-#endif
+    Modified in Oct 2004 by Hannu Savolainen 
+    hannu@opensound.com
+*/
+#include "SDL_config.h"
 
 /* Allow access to a raw mixing buffer */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
+#include <stdio.h>	/* For perror() */
+#include <string.h>	/* For strerror() */
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -37,7 +35,8 @@ static char rcsid =
 #include <sys/time.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
-#ifdef OSS_USE_SOUNDCARD_H
+
+#if SDL_AUDIO_DRIVER_OSS_SOUNDCARD_H
 /* This is installed on some systems */
 #include <soundcard.h>
 #else
@@ -45,19 +44,17 @@ static char rcsid =
 #include <sys/soundcard.h>
 #endif
 
-#include "SDL_audio.h"
-#include "SDL_error.h"
-#include "SDL_audiomem.h"
-#include "SDL_audio_c.h"
 #include "SDL_timer.h"
-#include "SDL_audiodev_c.h"
+#include "SDL_audio.h"
+#include "../SDL_audiomem.h"
+#include "../SDL_audio_c.h"
+#include "../SDL_audiodev_c.h"
 #include "SDL_dspaudio.h"
 
 /* The tag name used by DSP audio */
 #define DSP_DRIVER_NAME         "dsp"
 
 /* Open the audio device for playback, and don't block if busy */
-/*#define USE_BLOCKING_WRITES*/
 #define OPEN_FLAGS	(O_WRONLY|O_NONBLOCK)
 
 /* Audio driver functions */
@@ -85,8 +82,8 @@ static int Audio_Available(void)
 
 static void Audio_DeleteDevice(SDL_AudioDevice *device)
 {
-	free(device->hidden);
-	free(device);
+	SDL_free(device->hidden);
+	SDL_free(device);
 }
 
 static SDL_AudioDevice *Audio_CreateDevice(int devindex)
@@ -94,20 +91,20 @@ static SDL_AudioDevice *Audio_CreateDevice(int devindex)
 	SDL_AudioDevice *this;
 
 	/* Initialize all variables that we clean on shutdown */
-	this = (SDL_AudioDevice *)malloc(sizeof(SDL_AudioDevice));
+	this = (SDL_AudioDevice *)SDL_malloc(sizeof(SDL_AudioDevice));
 	if ( this ) {
-		memset(this, 0, (sizeof *this));
+		SDL_memset(this, 0, (sizeof *this));
 		this->hidden = (struct SDL_PrivateAudioData *)
-				malloc((sizeof *this->hidden));
+				SDL_malloc((sizeof *this->hidden));
 	}
 	if ( (this == NULL) || (this->hidden == NULL) ) {
 		SDL_OutOfMemory();
 		if ( this ) {
-			free(this);
+			SDL_free(this);
 		}
 		return(0);
 	}
-	memset(this->hidden, 0, (sizeof *this->hidden));
+	SDL_memset(this->hidden, 0, (sizeof *this->hidden));
 	audio_fd = -1;
 
 	/* Set the function pointers */
@@ -130,94 +127,19 @@ AudioBootStrap DSP_bootstrap = {
 /* This function waits until it is possible to write a full sound buffer */
 static void DSP_WaitAudio(_THIS)
 {
-	/* Check to see if the thread-parent process is still alive */
-	{ static int cnt = 0;
-		/* Note that this only works with thread implementations 
-		   that use a different process id for each thread.
-		*/
-		if (parent && (((++cnt)%10) == 0)) { /* Check every 10 loops */
-			if ( kill(parent, 0) < 0 ) {
-				this->enabled = 0;
-			}
-		}
-	}
-
-#ifndef USE_BLOCKING_WRITES /* Not necessary when using blocking writes */
-	/* See if we need to use timed audio synchronization */
-	if ( frame_ticks ) {
-		/* Use timer for general audio synchronization */
-		Sint32 ticks;
-
-		ticks = ((Sint32)(next_frame - SDL_GetTicks()))-FUDGE_TICKS;
-		if ( ticks > 0 ) {
-			SDL_Delay(ticks);
-		}
-	} else {
-		/* Use select() for audio synchronization */
-		fd_set fdset;
-		struct timeval timeout;
-
-		FD_ZERO(&fdset);
-		FD_SET(audio_fd, &fdset);
-		timeout.tv_sec = 10;
-		timeout.tv_usec = 0;
-#ifdef DEBUG_AUDIO
-		fprintf(stderr, "Waiting for audio to get ready\n");
-#endif
-		if ( select(audio_fd+1, NULL, &fdset, NULL, &timeout) <= 0 ) {
-			const char *message =
-			"Audio timeout - buggy audio driver? (disabled)";
-			/* In general we should never print to the screen,
-			   but in this case we have no other way of letting
-			   the user know what happened.
-			*/
-			fprintf(stderr, "SDL: %s\n", message);
-			this->enabled = 0;
-			/* Don't try to close - may hang */
-			audio_fd = -1;
-#ifdef DEBUG_AUDIO
-			fprintf(stderr, "Done disabling audio\n");
-#endif
-		}
-#ifdef DEBUG_AUDIO
-		fprintf(stderr, "Ready!\n");
-#endif
-	}
-#endif /* !USE_BLOCKING_WRITES */
+	/* Not needed at all since OSS handles waiting automagically */
 }
 
 static void DSP_PlayAudio(_THIS)
 {
-	int written, p=0;
-
-	/* Write the audio data, checking for EAGAIN on broken audio drivers */
-	do {
-		written = write(audio_fd, &mixbuf[p], mixlen-p);
-		if (written>0)
-		   p += written;
-		if (written == -1 && errno != 0 && errno != EAGAIN && errno != EINTR)
-		{
-		   /* Non recoverable error has occurred. It should be reported!!! */
-		   perror("audio");
-		   break;
-		}
-
-		if ( p < written || ((written < 0) && ((errno == 0) || (errno == EAGAIN))) ) {
-			SDL_Delay(1);	/* Let a little CPU time go by */
-		}
-	} while ( p < written );
-
-	/* If timer synchronization is enabled, set the next write frame */
-	if ( frame_ticks ) {
-		next_frame += frame_ticks;
-	}
-
-	/* If we couldn't write, assume fatal error for now */
-	if ( written < 0 ) {
+	if (write(audio_fd, mixbuf, mixlen)==-1)
+	{
+		perror("Audio write");
 		this->enabled = 0;
 	}
+
 #ifdef DEBUG_AUDIO
-	fprintf(stderr, "Wrote %d bytes of audio data\n", written);
+	fprintf(stderr, "Wrote %d bytes of audio data\n", mixlen);
 #endif
 }
 
@@ -233,90 +155,9 @@ static void DSP_CloseAudio(_THIS)
 		mixbuf = NULL;
 	}
 	if ( audio_fd >= 0 ) {
-		int value;
-		ioctl(audio_fd, SNDCTL_DSP_RESET, &value);
 		close(audio_fd);
 		audio_fd = -1;
 	}
-}
-
-static int DSP_ReopenAudio(_THIS, const char *audiodev, int format,
-						SDL_AudioSpec *spec)
-{
-	int frag_spec;
-	int value;
-
-	/* Close and then reopen the audio device */
-	close(audio_fd);
-	audio_fd = open(audiodev, O_WRONLY, 0);
-	if ( audio_fd < 0 ) {
-		SDL_SetError("Couldn't open %s: %s", audiodev, strerror(errno));
-		return(-1);
-	}
-
-	/* Calculate the final parameters for this audio specification */
-	SDL_CalculateAudioSpec(spec);
-
-	/* Determine the power of two of the fragment size */
-	for ( frag_spec = 0; (0x01<<frag_spec) < spec->size; ++frag_spec );
-	if ( (0x01<<frag_spec) != spec->size ) {
-		SDL_SetError("Fragment size must be a power of two");
-		return(-1);
-	}
-	frag_spec |= 0x00020000;	/* two fragments, for low latency */
-
-	/* Set the audio buffering parameters */
-#ifdef DEBUG_AUDIO
-	fprintf(stderr, "Requesting %d fragments of size %d\n",
-		(frag_spec >> 16), 1<<(frag_spec&0xFFFF));
-#endif
-	if ( ioctl(audio_fd, SNDCTL_DSP_SETFRAGMENT, &frag_spec) < 0 ) {
-		fprintf(stderr, "Warning: Couldn't set audio fragment size\n");
-	}
-#ifdef DEBUG_AUDIO
-	{ audio_buf_info info;
-	  ioctl(audio_fd, SNDCTL_DSP_GETOSPACE, &info);
-	  fprintf(stderr, "fragments = %d\n", info.fragments);
-	  fprintf(stderr, "fragstotal = %d\n", info.fragstotal);
-	  fprintf(stderr, "fragsize = %d\n", info.fragsize);
-	  fprintf(stderr, "bytes = %d\n", info.bytes);
-	}
-#endif
-
-	/* Set the audio format */
-	value = format;
-	if ( (ioctl(audio_fd, SNDCTL_DSP_SETFMT, &value) < 0) ||
-						(value != format) ) {
-		SDL_SetError("Couldn't set audio format");
-		return(-1);
-	}
-
-	/* Set the number of channels of output */
-	value = spec->channels;
-#ifdef SNDCTL_DSP_CHANNELS
-	if ( ioctl(audio_fd, SNDCTL_DSP_CHANNELS, &value) < 0 ) {
-#endif
-		value = (spec->channels > 1);
-		ioctl(audio_fd, SNDCTL_DSP_STEREO, &value);
-		value = (value ? 2 : 1);
-#ifdef SNDCTL_DSP_CHANNELS
-	}
-#endif
-	if ( value != spec->channels ) {
-		SDL_SetError("Couldn't set audio channels");
-		return(-1);
-	}
-
-	/* Set the DSP frequency */
-	value = spec->freq;
-	if ( ioctl(audio_fd, SOUND_PCM_WRITE_RATE, &value) < 0 ) {
-		SDL_SetError("Couldn't set audio frequency");
-		return(-1);
-	}
-	spec->freq = value;
-
-	/* We successfully re-opened the audio */
-	return(0);
 }
 
 static int DSP_OpenAudio(_THIS, SDL_AudioSpec *spec)
@@ -324,10 +165,17 @@ static int DSP_OpenAudio(_THIS, SDL_AudioSpec *spec)
 	char audiodev[1024];
 	int format;
 	int value;
+	int frag_spec;
 	Uint16 test_format;
 
-	/* Reset the timer synchronization flag */
-	frame_ticks = 0.0;
+    /* Make sure fragment size stays a power of 2, or OSS fails. */
+    /* I don't know which of these are actually legal values, though... */
+    if (spec->channels > 8)
+        spec->channels = 8;
+    else if (spec->channels > 4)
+        spec->channels = 4;
+    else if (spec->channels > 2)
+        spec->channels = 2;
 
 	/* Open the audio device */
 	audio_fd = SDL_OpenAudioPath(audiodev, sizeof(audiodev), OPEN_FLAGS, 0);
@@ -337,21 +185,22 @@ static int DSP_OpenAudio(_THIS, SDL_AudioSpec *spec)
 	}
 	mixbuf = NULL;
 
-#ifdef USE_BLOCKING_WRITES
 	/* Make the file descriptor use blocking writes with fcntl() */
 	{ long flags;
 		flags = fcntl(audio_fd, F_GETFL);
 		flags &= ~O_NONBLOCK;
 		if ( fcntl(audio_fd, F_SETFL, flags) < 0 ) {
 			SDL_SetError("Couldn't set audio blocking mode");
+			DSP_CloseAudio(this);
 			return(-1);
 		}
 	}
-#endif
 
 	/* Get a list of supported hardware formats */
 	if ( ioctl(audio_fd, SNDCTL_DSP_GETFMTS, &value) < 0 ) {
+		perror("SNDCTL_DSP_GETFMTS");
 		SDL_SetError("Couldn't get audio format list");
+		DSP_CloseAudio(this);
 		return(-1);
 	}
 
@@ -368,11 +217,6 @@ static int DSP_OpenAudio(_THIS, SDL_AudioSpec *spec)
 					format = AFMT_U8;
 				}
 				break;
-			case AUDIO_S8:
-				if ( value & AFMT_S8 ) {
-					format = AFMT_S8;
-				}
-				break;
 			case AUDIO_S16LSB:
 				if ( value & AFMT_S16_LE ) {
 					format = AFMT_S16_LE;
@@ -381,6 +225,16 @@ static int DSP_OpenAudio(_THIS, SDL_AudioSpec *spec)
 			case AUDIO_S16MSB:
 				if ( value & AFMT_S16_BE ) {
 					format = AFMT_S16_BE;
+				}
+				break;
+#if 0
+/*
+ * These formats are not used by any real life systems so they are not 
+ * needed here.
+ */
+			case AUDIO_S8:
+				if ( value & AFMT_S8 ) {
+					format = AFMT_S8;
 				}
 				break;
 			case AUDIO_U16LSB:
@@ -393,6 +247,7 @@ static int DSP_OpenAudio(_THIS, SDL_AudioSpec *spec)
 					format = AFMT_U16_BE;
 				}
 				break;
+#endif
 			default:
 				format = 0;
 				break;
@@ -403,6 +258,7 @@ static int DSP_OpenAudio(_THIS, SDL_AudioSpec *spec)
 	}
 	if ( format == 0 ) {
 		SDL_SetError("Couldn't find any hardware audio formats");
+		DSP_CloseAudio(this);
 		return(-1);
 	}
 	spec->format = test_format;
@@ -411,50 +267,70 @@ static int DSP_OpenAudio(_THIS, SDL_AudioSpec *spec)
 	value = format;
 	if ( (ioctl(audio_fd, SNDCTL_DSP_SETFMT, &value) < 0) ||
 						(value != format) ) {
+		perror("SNDCTL_DSP_SETFMT");
 		SDL_SetError("Couldn't set audio format");
+		DSP_CloseAudio(this);
 		return(-1);
 	}
 
 	/* Set the number of channels of output */
 	value = spec->channels;
-#ifdef SNDCTL_DSP_CHANNELS
 	if ( ioctl(audio_fd, SNDCTL_DSP_CHANNELS, &value) < 0 ) {
-#endif
-		value = (spec->channels > 1);
-		ioctl(audio_fd, SNDCTL_DSP_STEREO, &value);
-		value = (value ? 2 : 1);
-#ifdef SNDCTL_DSP_CHANNELS
-	}
-#endif
-	spec->channels = value;
-
-	/* Because some drivers don't allow setting the buffer size
-	   after setting the format, we must re-open the audio device
-	   once we know what format and channels are supported
-	 */
-	if ( DSP_ReopenAudio(this, audiodev, format, spec) < 0 ) {
-		/* Error is set by DSP_ReopenAudio() */
+		perror("SNDCTL_DSP_CHANNELS");
+		SDL_SetError("Cannot set the number of channels");
+		DSP_CloseAudio(this);
 		return(-1);
 	}
+	spec->channels = value;
+
+	/* Set the DSP frequency */
+	value = spec->freq;
+	if ( ioctl(audio_fd, SNDCTL_DSP_SPEED, &value) < 0 ) {
+		perror("SNDCTL_DSP_SPEED");
+		SDL_SetError("Couldn't set audio frequency");
+		DSP_CloseAudio(this);
+		return(-1);
+	}
+	spec->freq = value;
+
+	/* Calculate the final parameters for this audio specification */
+	SDL_CalculateAudioSpec(spec);
+
+	/* Determine the power of two of the fragment size */
+	for ( frag_spec = 0; (0x01U<<frag_spec) < spec->size; ++frag_spec );
+	if ( (0x01U<<frag_spec) != spec->size ) {
+		SDL_SetError("Fragment size must be a power of two");
+		DSP_CloseAudio(this);
+		return(-1);
+	}
+	frag_spec |= 0x00020000;	/* two fragments, for low latency */
+
+	/* Set the audio buffering parameters */
+#ifdef DEBUG_AUDIO
+	fprintf(stderr, "Requesting %d fragments of size %d\n",
+		(frag_spec >> 16), 1<<(frag_spec&0xFFFF));
+#endif
+	if ( ioctl(audio_fd, SNDCTL_DSP_SETFRAGMENT, &frag_spec) < 0 ) {
+		perror("SNDCTL_DSP_SETFRAGMENT");
+	}
+#ifdef DEBUG_AUDIO
+	{ audio_buf_info info;
+	  ioctl(audio_fd, SNDCTL_DSP_GETOSPACE, &info);
+	  fprintf(stderr, "fragments = %d\n", info.fragments);
+	  fprintf(stderr, "fragstotal = %d\n", info.fragstotal);
+	  fprintf(stderr, "fragsize = %d\n", info.fragsize);
+	  fprintf(stderr, "bytes = %d\n", info.bytes);
+	}
+#endif
 
 	/* Allocate mixing buffer */
 	mixlen = spec->size;
 	mixbuf = (Uint8 *)SDL_AllocAudioMem(mixlen);
 	if ( mixbuf == NULL ) {
+		DSP_CloseAudio(this);
 		return(-1);
 	}
-	memset(mixbuf, spec->silence, spec->size);
-
-#ifndef USE_BLOCKING_WRITES
-	/* Check to see if we need to use select() workaround */
-	{ char *workaround;
-		workaround = getenv("SDL_DSP_NOSELECT");
-		if ( workaround ) {
-			frame_ticks = (float)(spec->samples*1000)/spec->freq;
-			next_frame = SDL_GetTicks()+frame_ticks;
-		}
-	}
-#endif /* !USE_BLOCKING_WRITES */
+	SDL_memset(mixbuf, spec->silence, spec->size);
 
 	/* Get the parent process id (we're the parent of the audio thread) */
 	parent = getpid();

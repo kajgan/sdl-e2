@@ -1,6 +1,6 @@
 /*
     SDL - Simple DirectMedia Layer
-    Copyright (C) 1997-2003  Sam Lantinga
+    Copyright (C) 1997-2012  Sam Lantinga
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Library General Public
@@ -19,91 +19,120 @@
     Sam Lantinga
     slouken@libsdl.org
 */
+#include "SDL_config.h"
 
 #include "SDL_QuartzVideo.h"
+#include "SDL_QuartzWM.h"
 
-
-struct WMcursor {
-    Cursor curs;
-};
 
 void QZ_FreeWMCursor     (_THIS, WMcursor *cursor) { 
 
-    if ( cursor != NULL )
+    if ( cursor != NULL ) {
+        [ cursor->nscursor release ];
         free (cursor);
+    }
 }
 
-/* Use the Carbon cursor routines for now */
 WMcursor*    QZ_CreateWMCursor   (_THIS, Uint8 *data, Uint8 *mask, 
                                          int w, int h, int hot_x, int hot_y) { 
     WMcursor *cursor;
-    int row, bytes;
-        
+    NSBitmapImageRep *imgrep;
+    NSImage *img;
+    unsigned char *planes[5];
+    int i;
+    NSAutoreleasePool *pool;
+    
+    pool = [ [ NSAutoreleasePool alloc ] init ];
+    
     /* Allocate the cursor memory */
-    cursor = (WMcursor *)malloc(sizeof(WMcursor));
-    if ( cursor == NULL ) {
-        SDL_OutOfMemory();
-        return(NULL);
-    }
-    memset(cursor, 0, sizeof(*cursor));
-    
-    if (w > 16)
-        w = 16;
-    
-    if (h > 16)
-        h = 16;
-    
-    bytes = (w+7)/8;
+    cursor = (WMcursor *)SDL_malloc(sizeof(WMcursor));
+    if (cursor == NULL) goto outOfMemory;
 
-    for ( row=0; row<h; ++row ) {
-        memcpy(&cursor->curs.data[row], data, bytes);
-        data += bytes;
-    }
-    for ( row=0; row<h; ++row ) {
-        memcpy(&cursor->curs.mask[row], mask, bytes);
-        mask += bytes;
-    }
-    cursor->curs.hotSpot.h = hot_x;
-    cursor->curs.hotSpot.v = hot_y;
+    /* create the image representation and get the pointers to its storage */
+    imgrep = [ [ [ NSBitmapImageRep alloc ] initWithBitmapDataPlanes: NULL pixelsWide: w pixelsHigh: h bitsPerSample: 1 samplesPerPixel: 2 hasAlpha: YES isPlanar: YES colorSpaceName: NSDeviceWhiteColorSpace bytesPerRow: (w+7)/8 bitsPerPixel: 0 ] autorelease ];
+    if (imgrep == nil) goto outOfMemory;
+    [ imgrep getBitmapDataPlanes: planes ];
     
+    /* copy data and mask, extending the mask to all black pixels because the inversion effect doesn't work with Cocoa's alpha-blended cursors */
+    for (i = 0; i < (w+7)/8*h; i++) {
+        planes[0][i] = data[i] ^ 0xFF;
+        planes[1][i] = mask[i] | data[i];
+    }
+
+    /* create image and cursor */
+    img = [ [ [ NSImage alloc ] initWithSize: NSMakeSize(w, h) ] autorelease ];
+    if (img == nil) goto outOfMemory;
+    [ img addRepresentation: imgrep ];
+    if (system_version < 0x1030) { /* on 10.2, cursors must be 16*16 */
+        if (w > 16 || h > 16) { /* too big: scale it down */
+            [ img setScalesWhenResized: YES ];
+            hot_x = hot_x*16/w;
+            hot_y = hot_y*16/h;
+        }
+        else { /* too small (or just right): extend it (from the bottom left corner, so hot_y must be adjusted) */
+            hot_y += 16 - h;
+        }
+        [ img setSize: NSMakeSize(16, 16) ];
+    }
+    cursor->nscursor = [ [ NSCursor alloc ] initWithImage: img hotSpot: NSMakePoint(hot_x, hot_y) ];
+    if (cursor->nscursor == nil) goto outOfMemory;
+    
+    [ pool release ];
     return(cursor);
+
+outOfMemory:
+    [ pool release ];
+    if (cursor != NULL) SDL_free(cursor);
+    SDL_OutOfMemory();
+    return(NULL);
 }
 
-void QZ_ShowMouse (_THIS) {
-    if (!cursor_visible) {
-        [ NSCursor unhide ];
-        cursor_visible = YES;
+void QZ_UpdateCursor (_THIS) {
+    BOOL state;
+
+    if (cursor_should_be_visible || !(SDL_GetAppState() & SDL_APPMOUSEFOCUS)) {
+        state = YES;
+    } else {
+        state = NO;
     }
-}
-
-void QZ_HideMouse (_THIS) {
-    BOOL isInGameWin = QZ_IsMouseInWindow (this);
-    if (isInGameWin && cursor_visible) {
-        [ NSCursor hide ];
-        cursor_visible = NO;
+    if (state != cursor_visible) {
+        if (state) {
+            [ NSCursor unhide ];
+        } else {
+            [ NSCursor hide ];
+        }
+        cursor_visible = state;
     }
 }
 
 BOOL QZ_IsMouseInWindow (_THIS) {
-    return (mode_flags & SDL_FULLSCREEN) ? true : NSPointInRect([ qz_window mouseLocationOutsideOfEventStream ], [ window_view frame ]);
+    if (qz_window == nil || (mode_flags & SDL_FULLSCREEN)) return YES; /*fullscreen*/
+    else {
+        NSPoint p = [ qz_window mouseLocationOutsideOfEventStream ];
+        p.y -= 1.0f; /* Apparently y goes from 1 to h, not from 0 to h-1 (i.e. the "location of the mouse" seems to be defined as "the location of the top left corner of the mouse pointer's hot pixel" */
+        return NSPointInRect(p, [ window_view frame ]);
+    }
 }
 
 int QZ_ShowWMCursor (_THIS, WMcursor *cursor) { 
 
     if ( cursor == NULL) {
         if ( cursor_should_be_visible ) {
-            QZ_HideMouse (this);
             cursor_should_be_visible = NO;
             QZ_ChangeGrabState (this, QZ_HIDECURSOR);
         }
+        QZ_UpdateCursor(this);
     }
     else {
-        SetCursor(&cursor->curs);
+        if ( qz_window != nil && !(mode_flags & SDL_FULLSCREEN) ) {
+            [ qz_window invalidateCursorRectsForView: [ qz_window contentView ] ];
+        }
         if ( ! cursor_should_be_visible ) {
-            QZ_ShowMouse (this);
             cursor_should_be_visible = YES;
             QZ_ChangeGrabState (this, QZ_SHOWCURSOR);
         }
+        [ cursor->nscursor performSelectorOnMainThread:@selector(set) withObject:nil waitUntilDone:NO ];
+        QZ_UpdateCursor(this);
     }
 
     return 1;
@@ -120,14 +149,16 @@ int QZ_ShowWMCursor (_THIS, WMcursor *cursor) {
 /* Convert Cocoa screen coordinate to Cocoa window coordinate */
 void QZ_PrivateGlobalToLocal (_THIS, NSPoint *p) {
 
-    *p = [ qz_window convertScreenToBase:*p ];
+	if ( ! CGDisplayIsCaptured (display_id) )
+		*p = [ qz_window convertScreenToBase:*p ];
 }
 
 
 /* Convert Cocoa window coordinate to Cocoa screen coordinate */
 void QZ_PrivateLocalToGlobal (_THIS, NSPoint *p) {
 
-    *p = [ qz_window convertBaseToScreen:*p ];
+	if ( ! CGDisplayIsCaptured (display_id) )
+		*p = [ qz_window convertBaseToScreen:*p ];
 }
 
 /* Convert SDL coordinate to Cocoa coordinate */
@@ -135,15 +166,12 @@ void QZ_PrivateSDLToCocoa (_THIS, NSPoint *p) {
 
     if ( CGDisplayIsCaptured (display_id) ) { /* capture signals fullscreen */
     
-        p->y = CGDisplayPixelsHigh (display_id) - p->y - 1;
+        p->y = CGDisplayPixelsHigh (display_id) - p->y;
     }
     else {
-        
-        NSPoint newPoint;
-        
-        newPoint = [ window_view convertPoint:*p toView:[ qz_window contentView ] ];
-        
-        *p = newPoint;
+       
+        *p = [ window_view convertPoint:*p toView: nil ];
+        p->y = [window_view frame].size.height - p->y;
     }
 }
 
@@ -152,15 +180,12 @@ void QZ_PrivateCocoaToSDL (_THIS, NSPoint *p) {
 
     if ( CGDisplayIsCaptured (display_id) ) { /* capture signals fullscreen */
     
-        p->y = CGDisplayPixelsHigh (display_id) - p->y - 1;
+        p->y = CGDisplayPixelsHigh (display_id) - p->y;
     }
     else {
-        
-        NSPoint newPoint;
-        
-        newPoint = [ window_view convertPoint:*p fromView:[ qz_window contentView ] ];
-        
-        *p = newPoint;
+
+        *p = [ window_view convertPoint:*p fromView: nil ];
+        p->y = [window_view frame].size.height - p->y;
     }
 }
 
@@ -205,7 +230,6 @@ void QZ_PrivateCGToSDL (_THIS, NSPoint *p) {
 #endif /* Dead code */
 
 void  QZ_PrivateWarpCursor (_THIS, int x, int y) {
-    
     NSPoint p;
     CGPoint cgp;
     
@@ -213,8 +237,12 @@ void  QZ_PrivateWarpCursor (_THIS, int x, int y) {
     cgp = QZ_PrivateSDLToCG (this, &p);
     
     /* this is the magic call that fixes cursor "freezing" after warp */
-    CGSetLocalEventsSuppressionInterval (0.0);
+    CGAssociateMouseAndMouseCursorPosition (0);
     CGWarpMouseCursorPosition (cgp);
+    if (grab_state != QZ_INVISIBLE_GRAB) { /* can't leave it disassociated? */
+        CGAssociateMouseAndMouseCursorPosition (1);
+    }
+    SDL_PrivateAppActive (QZ_IsMouseInWindow (this), SDL_APPMOUSEFOCUS);
 }
 
 void QZ_WarpWMCursor (_THIS, Uint16 x, Uint16 y) {
@@ -224,7 +252,7 @@ void QZ_WarpWMCursor (_THIS, Uint16 x, Uint16 y) {
         return;
             
     /* Do the actual warp */
-    QZ_PrivateWarpCursor (this, x, y);
+    if (grab_state != QZ_INVISIBLE_GRAB) QZ_PrivateWarpCursor (this, x, y);
 
     /* Generate the mouse moved event */
     SDL_PrivateMouseMotion (0, 0, x, y);
@@ -238,12 +266,12 @@ void QZ_SetCaption    (_THIS, const char *title, const char *icon) {
     if ( qz_window != nil ) {
         NSString *string;
         if ( title != NULL ) {
-            string = [ [ NSString alloc ] initWithCString:title ];
+            string = [ [ NSString alloc ] initWithUTF8String:title ];
             [ qz_window setTitle:string ];
             [ string release ];
         }
         if ( icon != NULL ) {
-            string = [ [ NSString alloc ] initWithCString:icon ];
+            string = [ [ NSString alloc ] initWithUTF8String:icon ];
             [ qz_window setMiniwindowTitle:string ];
             [ string release ];
         }
@@ -255,74 +283,77 @@ void QZ_SetIcon       (_THIS, SDL_Surface *icon, Uint8 *mask)
     NSBitmapImageRep *imgrep;
     NSImage *img;
     SDL_Surface *mergedSurface;
-    int i,j;
     NSAutoreleasePool *pool;
-    SDL_Rect rrect;
-    NSSize imgSize = {icon->w, icon->h};
+    Uint8 *pixels;
+    SDL_bool iconSrcAlpha;
+    Uint8 iconAlphaValue;
+    int i, j, maskPitch, index;
     
     pool = [ [ NSAutoreleasePool alloc ] init ];
-    SDL_GetClipRect(icon, &rrect);
     
-    /* create a big endian RGBA surface */
-    mergedSurface = SDL_CreateRGBSurface(SDL_SWSURFACE|SDL_SRCALPHA, 
-                    icon->w, icon->h, 32, 0xff<<24, 0xff<<16, 0xff<<8, 0xff<<0);
-    if (mergedSurface==NULL) {
-        NSLog(@"Error creating surface for merge");
-        goto freePool;
-    }
+    imgrep = [ [ [ NSBitmapImageRep alloc ] initWithBitmapDataPlanes: NULL pixelsWide: icon->w pixelsHigh: icon->h bitsPerSample: 8 samplesPerPixel: 4 hasAlpha: YES isPlanar: NO colorSpaceName: NSDeviceRGBColorSpace bytesPerRow: 4*icon->w bitsPerPixel: 32 ] autorelease ];
+    if (imgrep == nil) goto freePool;
+    pixels = [ imgrep bitmapData ];
+    SDL_memset(pixels, 0, 4*icon->w*icon->h); /* make the background, which will survive in colorkeyed areas, completely transparent */
     
-    if (mergedSurface->pitch != 
-        mergedSurface->format->BytesPerPixel * mergedSurface->w) {
-        SDL_SetError ("merged surface has wrong format");
-        SDL_FreeSurface (mergedSurface);
-        goto freePool;
-    }
+#if SDL_BYTEORDER == SDL_BIG_ENDIAN
+#define BYTEORDER_DEPENDENT_RGBA_MASKS 0xFF000000, 0x00FF0000, 0x0000FF00, 0x000000FF
+#else
+#define BYTEORDER_DEPENDENT_RGBA_MASKS 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000
+#endif
+    mergedSurface = SDL_CreateRGBSurfaceFrom(pixels, icon->w, icon->h, 32, 4*icon->w, BYTEORDER_DEPENDENT_RGBA_MASKS);
+    if (mergedSurface == NULL) goto freePool;
     
-    if (SDL_BlitSurface(icon,&rrect,mergedSurface,&rrect)) {
-        NSLog(@"Error blitting to mergedSurface");
-        goto freePool;
-    }
+    /* blit, with temporarily cleared SRCALPHA flag because we want to copy, not alpha-blend */
+    iconSrcAlpha = ((icon->flags & SDL_SRCALPHA) != 0);
+    iconAlphaValue = icon->format->alpha;
+    SDL_SetAlpha(icon, 0, 255);
+    SDL_BlitSurface(icon, NULL, mergedSurface, NULL);
+    if (iconSrcAlpha) SDL_SetAlpha(icon, SDL_SRCALPHA, iconAlphaValue);
     
-    if (mask) {
-
-        Uint32 *pixels = mergedSurface->pixels;
-        for (i = 0; i < mergedSurface->h; i++) {
-            for (j = 0; j < mergedSurface->w; j++) {
-                
-                int index = i * mergedSurface->w + j;
-                int mindex = index >> 3;
-                int bindex = 7 - (index & 0x7);
-                
-                if (mask[mindex] & (1 << bindex))
-                    pixels[index] |= 0x000000FF;
-                else
-                    pixels[index] &= 0xFFFFFF00;
+    SDL_FreeSurface(mergedSurface);
+    
+    /* apply mask, source alpha, and premultiply color values by alpha */
+    maskPitch = (icon->w+7)/8;
+    for (i = 0; i < icon->h; i++) {
+        for (j = 0; j < icon->w; j++) {
+            index = i*4*icon->w + j*4;
+            if (!(mask[i*maskPitch + j/8] & (128 >> j%8))) {
+                pixels[index + 3] = 0;
+            }
+            else {
+                if (iconSrcAlpha) {
+                    if (icon->format->Amask == 0) pixels[index + 3] = icon->format->alpha;
+                }
+                else {
+                    pixels[index + 3] = 255;
+                }
+            }
+            if (pixels[index + 3] < 255) {
+                pixels[index + 0] = (Uint16)pixels[index + 0]*pixels[index + 3]/255;
+                pixels[index + 1] = (Uint16)pixels[index + 1]*pixels[index + 3]/255;
+                pixels[index + 2] = (Uint16)pixels[index + 2]*pixels[index + 3]/255;
             }
         }
     }
     
-    imgrep = [ [ NSBitmapImageRep alloc] 
-                    initWithBitmapDataPlanes:(unsigned char **)&mergedSurface->pixels 
-                        pixelsWide:icon->w pixelsHigh:icon->h bitsPerSample:8 samplesPerPixel:4 
-                        hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace 
-                        bytesPerRow:icon->w<<2 bitsPerPixel:32 ];
-    
-    img = [ [ NSImage alloc ] initWithSize:imgSize ];
-    
+    img = [ [ [ NSImage alloc ] initWithSize: NSMakeSize(icon->w, icon->h) ] autorelease ];
+    if (img == nil) goto freePool;
     [ img addRepresentation: imgrep ];
     [ NSApp setApplicationIconImage:img ];
     
-    [ img release ];
-    [ imgrep release ];
-    SDL_FreeSurface(mergedSurface);
 freePool:
-    [pool release];
+    [ pool release ];
 }
 
 int  QZ_IconifyWindow (_THIS) { 
 
     if ( ! [ qz_window isMiniaturized ] ) {
         [ qz_window miniaturize:nil ];
+        if ( ! [ qz_window isMiniaturized ] ) {
+            SDL_SetError ("window iconification failed");
+            return 0;
+        }
         return 1;
     }
     else {
@@ -406,6 +437,7 @@ SDL_GrabMode QZ_GrabInput (_THIS, SDL_GrabMode grab_mode) {
             QZ_ChangeGrabState (this, QZ_DISABLE_GRAB);
         
         current_grab_mode = doGrab ? SDL_GRAB_ON : SDL_GRAB_OFF;
+        QZ_UpdateCursor(this);
     }
 
     return current_grab_mode;

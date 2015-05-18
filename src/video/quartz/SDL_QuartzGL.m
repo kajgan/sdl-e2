@@ -1,6 +1,6 @@
 /*
     SDL - Simple DirectMedia Layer
-    Copyright (C) 1997-2003  Sam Lantinga
+    Copyright (C) 1997-2012  Sam Lantinga
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Library General Public
@@ -19,16 +19,46 @@
     Sam Lantinga
     slouken@libsdl.org
 */
+#include "SDL_config.h"
 
 #include "SDL_QuartzVideo.h"
 
+/*
+ * GL_ARB_Multisample is supposed to be available in 10.1, according to Apple:
+ *
+ *   http://developer.apple.com/graphicsimaging/opengl/extensions.html#GL_ARB_multisample
+ *
+ *  ...but it isn't in the system headers, according to Sam:
+ *
+ *   http://lists.libsdl.org/pipermail/sdl-libsdl.org/2003-December/039794.html
+ *
+ * These are normally enums and not #defines in the system headers.
+ *
+ *   --ryan.
+ */
+#if (MAC_OS_X_VERSION_MAX_ALLOWED < 1020)
+#define NSOpenGLPFASampleBuffers ((NSOpenGLPixelFormatAttribute) 55)
+#define NSOpenGLPFASamples ((NSOpenGLPixelFormatAttribute) 56)
+#endif
 
+#ifdef __powerpc__   /* we lost this in 10.6, which has no PPC support. */
 @implementation NSOpenGLContext (CGLContextAccess)
 - (CGLContextObj) cglContext;
 {
     return _contextAuxiliary;
 }
 @end
+CGLContextObj QZ_GetCGLContextObj(NSOpenGLContext *nsctx)
+{
+    return [nsctx cglContext];
+}
+#else
+CGLContextObj QZ_GetCGLContextObj(NSOpenGLContext *nsctx)
+{
+    return (CGLContextObj) [nsctx CGLContextObj];
+}
+#endif
+
 
 /* OpenGL helper functions (used internally) */
 
@@ -38,6 +68,12 @@ int QZ_SetupOpenGL (_THIS, int bpp, Uint32 flags) {
     NSOpenGLPixelFormat *fmt;
     int i = 0;
     int colorBits = bpp;
+
+    /* if a GL library hasn't been loaded at this point, load the default. */
+    if (!this->gl_config.driver_loaded) {
+        if (QZ_GL_LoadLibrary(this, NULL) == -1)
+            return 0;
+    }
 
     if ( flags & SDL_FULLSCREEN ) {
 
@@ -68,7 +104,14 @@ int QZ_SetupOpenGL (_THIS, int bpp, Uint32 flags) {
         attr[i++] = this->gl_config.stencil_size;
     }
 
-#if NSOPENGL_CURRENT_VERSION > 1  /* What version should this be? */
+    if ( (this->gl_config.accum_red_size +
+          this->gl_config.accum_green_size +
+          this->gl_config.accum_blue_size +
+          this->gl_config.accum_alpha_size) > 0 ) {
+        attr[i++] = NSOpenGLPFAAccumSize;
+        attr[i++] = this->gl_config.accum_red_size + this->gl_config.accum_green_size + this->gl_config.accum_blue_size + this->gl_config.accum_alpha_size;
+    }
+
     if ( this->gl_config.multisamplebuffers != 0 ) {
         attr[i++] = NSOpenGLPFASampleBuffers;
         attr[i++] = this->gl_config.multisamplebuffers;
@@ -77,8 +120,12 @@ int QZ_SetupOpenGL (_THIS, int bpp, Uint32 flags) {
     if ( this->gl_config.multisamplesamples != 0 ) {
         attr[i++] = NSOpenGLPFASamples;
         attr[i++] = this->gl_config.multisamplesamples;
+        attr[i++] = NSOpenGLPFANoRecovery;
     }
-#endif
+
+    if ( this->gl_config.accelerated > 0 ) {
+        attr[i++] = NSOpenGLPFAAccelerated;
+    }
 
     attr[i++] = NSOpenGLPFAScreenMask;
     attr[i++] = CGDisplayIDToOpenGLDisplayMask (display_id);
@@ -93,9 +140,22 @@ int QZ_SetupOpenGL (_THIS, int bpp, Uint32 flags) {
     gl_context = [ [ NSOpenGLContext alloc ] initWithFormat:fmt
                                                shareContext:nil];
 
+    [ fmt release ];
+
     if (gl_context == nil) {
         SDL_SetError ("Failed creating OpenGL context");
         return 0;
+    }
+
+    /* Synchronize QZ_GL_SwapBuffers() to vertical retrace.
+     * (Apple's documentation is not completely clear about what this setting
+     * exactly does, IMHO - for a detailed explanation see
+     * http://lists.apple.com/archives/mac-opengl/2006/Jan/msg00080.html )
+     */
+    if ( this->gl_config.swap_control >= 0 ) {
+        GLint value;
+        value = this->gl_config.swap_control;
+        [ gl_context setValues: &value forParameter: NSOpenGLCPSwapInterval ];
     }
 
     /*
@@ -115,18 +175,13 @@ int QZ_SetupOpenGL (_THIS, int bpp, Uint32 flags) {
     #endif
 
     {
-        long cache_max = 64;
-        CGLContextObj ctx = [ gl_context cglContext ];
+        GLint cache_max = 64;
+        CGLContextObj ctx = QZ_GetCGLContextObj(gl_context);
         CGLSetParameter (ctx, GLI_SUBMIT_FUNC_CACHE_MAX, &cache_max);
         CGLSetParameter (ctx, GLI_ARRAY_FUNC_CACHE_MAX, &cache_max);
     }
 
     /* End Wisdom from Apple Engineer section. --ryan. */
-
-    /* Convince SDL that the GL "driver" is loaded */
-    this->gl_config.driver_loaded = 1;
-
-    [ fmt release ];
 
     return 1;
 }
@@ -140,34 +195,33 @@ void QZ_TearDownOpenGL (_THIS) {
 
 
 /* SDL OpenGL functions */
+static const char *DEFAULT_OPENGL_LIB_NAME =
+    "/System/Library/Frameworks/OpenGL.framework/Libraries/libGL.dylib";
 
 int    QZ_GL_LoadLibrary    (_THIS, const char *location) {
-    this->gl_config.driver_loaded = 1;
-    return 1;
+    if ( gl_context != NULL ) {
+        SDL_SetError("OpenGL context already created");
+        return -1;
+    }
+
+    if (opengl_library != NULL)
+        SDL_UnloadObject(opengl_library);
+
+    if (location == NULL)
+        location = DEFAULT_OPENGL_LIB_NAME;
+
+    opengl_library = SDL_LoadObject(location);
+    if (opengl_library != NULL) {
+        this->gl_config.driver_loaded = 1;
+        return 0;
+    }
+
+    this->gl_config.driver_loaded = 0;
+    return -1;
 }
 
 void*  QZ_GL_GetProcAddress (_THIS, const char *proc) {
-
-    /* We may want to cache the bundleRef at some point */
-    CFBundleRef bundle;
-    CFURLRef bundleURL = CFURLCreateWithFileSystemPath (kCFAllocatorDefault,
-                                                        CFSTR("/System/Library/Frameworks/OpenGL.framework"), kCFURLPOSIXPathStyle, true);
-
-    CFStringRef functionName = CFStringCreateWithCString
-        (kCFAllocatorDefault, proc, kCFStringEncodingASCII);
-
-    void *function;
-
-    bundle = CFBundleCreate (kCFAllocatorDefault, bundleURL);
-    assert (bundle != NULL);
-
-    function = CFBundleGetFunctionPointerForName (bundle, functionName);
-
-    CFRelease ( bundleURL );
-    CFRelease ( functionName );
-    CFRelease ( bundle );
-
-    return function;
+    return SDL_LoadFunction(opengl_library, proc);
 }
 
 int    QZ_GL_GetAttribute   (_THIS, SDL_GLattr attrib, int* value) {
@@ -203,8 +257,25 @@ int    QZ_GL_GetAttribute   (_THIS, SDL_GLattr attrib, int* value) {
             glGetIntegerv (GL_ALPHA_BITS, &component); bits += component;
 
             *value = bits;
+            return 0;
         }
-        return 0;
+        case SDL_GL_ACCELERATED_VISUAL:
+        {
+            GLint val;
+	    /* FIXME: How do we get this information here?
+            [fmt getValues: &val forAttribute: NSOpenGLPFAAccelerated attr forVirtualScreen: 0];
+	    */
+	    val = (this->gl_config.accelerated != 0);;
+            *value = val;
+            return 0;
+        }
+        case SDL_GL_SWAP_CONTROL:
+        {
+            GLint val;
+            [ gl_context getValues: &val forParameter: NSOpenGLCPSwapInterval ];
+            *value = val;
+            return 0;
+        }
     }
 
     glGetIntegerv (attr, (GLint *)value);

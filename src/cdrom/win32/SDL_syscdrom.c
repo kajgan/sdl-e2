@@ -1,40 +1,36 @@
 /*
     SDL - Simple DirectMedia Layer
-    Copyright (C) 1997-2004 Sam Lantinga
+    Copyright (C) 1997-2012 Sam Lantinga
 
     This library is free software; you can redistribute it and/or
-    modify it under the terms of the GNU Library General Public
+    modify it under the terms of the GNU Lesser General Public
     License as published by the Free Software Foundation; either
-    version 2 of the License, or (at your option) any later version.
+    version 2.1 of the License, or (at your option) any later version.
 
     This library is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-    Library General Public License for more details.
+    Lesser General Public License for more details.
 
-    You should have received a copy of the GNU Library General Public
-    License along with this library; if not, write to the Free
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
     Sam Lantinga
     slouken@libsdl.org
 */
+#include "SDL_config.h"
 
-#ifdef SAVE_RCSID
-static char rcsid =
- "@(#) $Id: SDL_syscdrom.c,v 1.7 2004/01/04 16:49:17 slouken Exp $";
-#endif
+#ifdef SDL_CDROM_WIN32
 
 /* Functions for system-level CD-ROM audio control */
 
-#include <stdlib.h>
-#include <stdio.h>
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <mmsystem.h>
 
-#include "SDL_error.h"
 #include "SDL_cdrom.h"
-#include "SDL_syscdrom.h"
+#include "../SDL_syscdrom.h"
 
 /* This really broken?? */
 #define BROKEN_MCI_PAUSE	/* Pausing actually stops play -- Doh! */
@@ -48,6 +44,7 @@ static MCIDEVICEID SDL_mciID[MAX_DRIVES];
 #ifdef BROKEN_MCI_PAUSE
 static int SDL_paused[MAX_DRIVES];
 #endif
+static int SDL_CD_end_position;
 
 /* The system-dependent CD control functions */
 static const char *SDL_SYS_CDName(int drive);
@@ -70,12 +67,11 @@ static void AddDrive(char *drive)
 	if ( SDL_numcds < MAX_DRIVES ) {
 		/* Add this drive to our list */
 		i = SDL_numcds;
-		SDL_cdlist[i] = (char *)malloc(strlen(drive)+1);
+		SDL_cdlist[i] = SDL_strdup(drive);
 		if ( SDL_cdlist[i] == NULL ) {
 			SDL_OutOfMemory();
 			return;
 		}
-		strcpy(SDL_cdlist[i], drive);
 		++SDL_numcds;
 #ifdef CDROM_DEBUG
   fprintf(stderr, "Added CD-ROM drive: %s\n", drive);
@@ -103,12 +99,12 @@ int  SDL_SYS_CDInit(void)
 
 	/* Scan the system for CD-ROM drives */
 	for ( i='A'; i<='Z'; ++i ) {
-		sprintf(drive, "%c:\\", i);
+		SDL_snprintf(drive, SDL_arraysize(drive), "%c:\\", i);
 		if ( GetDriveType(drive) == DRIVE_CDROM ) {
 			AddDrive(drive);
 		}
 	}
-	memset(SDL_mciID, 0, sizeof(SDL_mciID));
+	SDL_memset(SDL_mciID, 0, sizeof(SDL_mciID));
 	return(0);
 }
 
@@ -117,7 +113,7 @@ static int SDL_SYS_CDioctl(int id, UINT msg, DWORD flags, void *arg)
 {
 	MCIERROR mci_error;
 
-	mci_error = mciSendCommand(SDL_mciID[id], msg, flags, (DWORD)arg);
+	mci_error = mciSendCommand(SDL_mciID[id], msg, flags, (DWORD_PTR)arg);
 	if ( mci_error ) {
 		char error[256];
 
@@ -222,8 +218,7 @@ static int SDL_SYS_CDGetTOC(SDL_CD *cdrom)
 				cdrom->track[i - 1].length = MSF_TO_FRAMES(
 					MCI_MSF_MINUTE(mci_status.dwReturn),
 					MCI_MSF_SECOND(mci_status.dwReturn),
-					MCI_MSF_FRAME(mci_status.dwReturn)) + 1; /* +1 to fix */
-											/* MCI last track length bug */
+					MCI_MSF_FRAME(mci_status.dwReturn));
 				/* compute lead-out offset */
 				cdrom->track[i].offset = cdrom->track[i - 1].offset +
 					cdrom->track[i - 1].length;
@@ -314,6 +309,7 @@ static int SDL_SYS_CDPlay(SDL_CD *cdrom, int start, int length)
 	mci_play.dwFrom = MCI_MAKE_MSF(m, s, f);
 	FRAMES_TO_MSF(start+length, &m, &s, &f);
 	mci_play.dwTo = MCI_MAKE_MSF(m, s, f);
+	SDL_CD_end_position = mci_play.dwTo;
 	return(SDL_SYS_CDioctl(cdrom->id, MCI_PLAY, flags, &mci_play));
 }
 
@@ -335,15 +331,16 @@ static int SDL_SYS_CDResume(SDL_CD *cdrom)
 	int flags;
 
 	okay = 0;
-	/* Play from the current play position to end of CD */
+	/* Play from the current play position to the end position set earlier */
 	flags = MCI_STATUS_ITEM | MCI_WAIT;
 	mci_status.dwItem = MCI_STATUS_POSITION;
 	if ( SDL_SYS_CDioctl(cdrom->id, MCI_STATUS, flags, &mci_status) == 0 ) {
 		MCI_PLAY_PARMS mci_play;
 
-		flags = MCI_FROM | MCI_NOTIFY;
+		flags = MCI_FROM | MCI_TO | MCI_NOTIFY;
 		mci_play.dwCallback = 0;
 		mci_play.dwFrom = mci_status.dwReturn;
+		mci_play.dwTo = SDL_CD_end_position;
 		if (SDL_SYS_CDioctl(cdrom->id,MCI_PLAY,flags,&mci_play) == 0) {
 			okay = 1;
 			SDL_paused[cdrom->id] = 0;
@@ -379,8 +376,11 @@ void SDL_SYS_CDQuit(void)
 
 	if ( SDL_numcds > 0 ) {
 		for ( i=0; i<SDL_numcds; ++i ) {
-			free(SDL_cdlist[i]);
+			SDL_free(SDL_cdlist[i]);
+			SDL_cdlist[i] = NULL;
 		}
 		SDL_numcds = 0;
 	}
 }
+
+#endif /* SDL_CDROM_WIN32 */

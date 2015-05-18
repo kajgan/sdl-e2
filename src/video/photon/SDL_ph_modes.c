@@ -1,34 +1,28 @@
 /*
     SDL - Simple DirectMedia Layer
-    Copyright (C) 1997-2004 Sam Lantinga
+    Copyright (C) 1997-2012 Sam Lantinga
 
     This library is free software; you can redistribute it and/or
-    modify it under the terms of the GNU Library General Public
+    modify it under the terms of the GNU Lesser General Public
     License as published by the Free Software Foundation; either
-    version 2 of the License, or (at your option) any later version.
+    version 2.1 of the License, or (at your option) any later version.
 
     This library is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-    Library General Public License for more details.
+    Lesser General Public License for more details.
 
-    You should have received a copy of the GNU Library General Public
-    License along with this library; if not, write to the Free
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
     Sam Lantinga
     slouken@libsdl.org
 */
+#include "SDL_config.h"
 
-#ifdef SAVE_RCSID
-static char rcsid =
- "@(#) $Id: SDL_ph_modes.c,v 1.13 2004/02/14 20:22:20 slouken Exp $";
-#endif
-
-#include "SDL_error.h"
 #include "SDL_ph_modes_c.h"
 
-static unsigned long key1, key2;
 static PgVideoModeInfo_t mode_info;
 static PgVideoModes_t mode_list;
 
@@ -38,34 +32,26 @@ SDL_Rect* SDL_modearray[PH_MAX_VIDEOMODES];
 
 static int compare_modes_by_res(const void* mode1, const void* mode2)
 {
-    if (PgGetVideoModeInfo(*(unsigned short*)mode1, &mode_info) < 0)
+    PgVideoModeInfo_t mode1_info;
+    PgVideoModeInfo_t mode2_info;
+
+    if (PgGetVideoModeInfo(*(unsigned short*)mode1, &mode1_info) < 0)
     {
         return 0;
     }
 
-    key1 = mode_info.width * mode_info.height;
-
-    if (PgGetVideoModeInfo(*(unsigned short*)mode2, &mode_info) < 0)
+    if (PgGetVideoModeInfo(*(unsigned short*)mode2, &mode2_info) < 0)
     {
         return 0;
     }
 
-    key2 = mode_info.width * mode_info.height;
-
-    if (key1 > key2)
+    if (mode1_info.width == mode2_info.width)
     {
-        return 1;
+        return mode2_info.height - mode1_info.height;
     }
     else
     {
-        if (key1 == key2)
-        {
-           return 0;
-        }
-        else
-        {
-            return -1;
-        }
+        return mode2_info.width - mode1_info.width;
     }
 }
 
@@ -187,7 +173,7 @@ int get_mode_any_format(int width, int height, int bpp)
         return -1;
     }
 
-    qsort(mode_list.modes, mode_list.num_modes, sizeof(unsigned short), compare_modes_by_res);
+    SDL_qsort(mode_list.modes, mode_list.num_modes, sizeof(unsigned short), compare_modes_by_res);
 
     for(i=0;i<mode_list.num_modes;i++)
     {
@@ -253,7 +239,7 @@ int ph_ToggleFullScreen(_THIS, int on)
     return -1;
 }
 
-int ph_EnterFullScreen(_THIS, SDL_Surface* screen)
+int ph_EnterFullScreen(_THIS, SDL_Surface* screen, int fmode)
 {
     PgDisplaySettings_t settings;
     int mode;
@@ -306,10 +292,10 @@ int ph_EnterFullScreen(_THIS, SDL_Surface* screen)
         settings.refresh = 0;
         settings.flags = 0;
 
-        refreshrate=getenv("SDL_PHOTON_FULLSCREEN_REFRESH");
+        refreshrate=SDL_getenv("SDL_PHOTON_FULLSCREEN_REFRESH");
         if (refreshrate!=NULL)
         {
-           if (sscanf(refreshrate, "%d", &refreshratenum)==1)
+           if (SDL_sscanf(refreshrate, "%d", &refreshratenum)==1)
            {
                settings.refresh = refreshratenum;
            }
@@ -325,24 +311,26 @@ int ph_EnterFullScreen(_THIS, SDL_Surface* screen)
         {
             if ((this->screen->flags & SDL_OPENGL)==SDL_OPENGL)
             {
-#ifdef HAVE_OPENGL
-#endif /* HAVE_OPENGL */
-                return 0;
+#if !SDL_VIDEO_OPENGL || (_NTO_VERSION < 630)
+                return 0; /* 6.3.0 */
+#endif
             }
         }
 
-        if (OCImage.direct_context==NULL)
+        if (fmode==0)
         {
-            OCImage.direct_context=(PdDirectContext_t*)PdCreateDirectContext();
-            if (!OCImage.direct_context)
+            if (OCImage.direct_context==NULL)
             {
-                SDL_SetError("ph_EnterFullScreen(): Can't create direct context !\n");
-                ph_LeaveFullScreen(this);
-                return 0;
+                OCImage.direct_context=(PdDirectContext_t*)PdCreateDirectContext();
+                if (!OCImage.direct_context)
+                {
+                    SDL_SetError("ph_EnterFullScreen(): Can't create direct context !\n");
+                    ph_LeaveFullScreen(this);
+                    return 0;
+                }
             }
+            OCImage.oldDC=PdDirectStart(OCImage.direct_context);
         }
-
-        OCImage.oldDC=PdDirectStart(OCImage.direct_context);
 
         currently_fullscreen = 1;
     }
@@ -359,11 +347,12 @@ int ph_LeaveFullScreen(_THIS)
     {
         if ((this->screen) && ((this->screen->flags & SDL_OPENGL)==SDL_OPENGL))
         {
-#ifdef HAVE_OPENGL
-#endif /* HAVE_OPENGL */
-           return 0;
+#if !SDL_VIDEO_OPENGL || (_NTO_VERSION < 630)
+            return 0;
+#endif
         }
-        else
+
+        /* release routines starts here */
         {
             if (OCImage.direct_context)
             {

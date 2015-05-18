@@ -1,29 +1,24 @@
 /*
     SDL - Simple DirectMedia Layer
-    Copyright (C) 1997, 1998, 1999, 2000, 2001, 2002  Sam Lantinga
+    Copyright (C) 1997-2012 Sam Lantinga
 
     This library is free software; you can redistribute it and/or
-    modify it under the terms of the GNU Library General Public
+    modify it under the terms of the GNU Lesser General Public
     License as published by the Free Software Foundation; either
-    version 2 of the License, or (at your option) any later version.
+    version 2.1 of the License, or (at your option) any later version.
 
     This library is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-    Library General Public License for more details.
+    Lesser General Public License for more details.
 
-    You should have received a copy of the GNU Library General Public
-    License along with this library; if not, write to the Free
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
     Sam Lantinga
     slouken@libsdl.org
 */
-
-#ifdef SAVE_RCSID
-static char rcsid =
- "@(#) $Id: SDL_ataric2p.S,v 1.3 2003/11/12 18:44:31 pmandin Exp $";
-#endif
 
 /*
 	Chunky to planar conversion routine
@@ -38,12 +33,12 @@ static char rcsid =
 	.globl	_SDL_Atari_C2pConvert8
 	.globl	_SDL_Atari_C2pConvert4
 	.globl	_SDL_Atari_C2pConvert4_pal
-	.globl	_SDL_Atari_table_c2p
 
 /* ------------	Conversion C2P, 8 bits ------------ */
 
 	.text
 _SDL_Atari_C2pConvert8:
+#if !defined(__mcoldfire__)
 	movel	sp@(4),c2p_source
 	movel	sp@(8),c2p_dest
 	movel	sp@(12),c2p_width
@@ -247,7 +242,7 @@ SDL_Atari_C2p8_start:
 	movel	d3,a3
 
 	cmpl	a0,a2
-	bgt	SDL_Atari_C2p8_pix16
+	bgt		SDL_Atari_C2p8_pix16
 
 	movel	a3,a1@+
 	movel	a4,a1@+
@@ -286,14 +281,16 @@ SDL_Atari_C2p8_nodblline:
 	addl	d1,c2p_curdst
 
 	subqw	#1,c2p_row
-	bne	SDL_Atari_C2p8_rowloop	
+	bne		SDL_Atari_C2p8_rowloop	
 
 	moveml	sp@+,d2-d7/a2-a6
+#endif
 	rts
 
 /* ------------	Conversion C2P, 4 bits ------------ */
 
 _SDL_Atari_C2pConvert4:
+#if !defined(__mcoldfire__)
 	movel	sp@(4),c2p_source
 	movel	sp@(8),c2p_dest
 	movel	sp@(12),c2p_width
@@ -308,7 +305,7 @@ _SDL_Atari_C2pConvert4:
 	movel	c2p_dest,a1
 	lea	_SDL_Atari_table_c2p,a2
 	movel	#0x00070001,d3
-#if defined(__M68020__)
+#if defined(__mc68020__)
 	moveq	#0,d0
 #endif
 	
@@ -329,17 +326,17 @@ c2p4_bclx:
 	moveq	#0,d1
 	moveq	#7,d5
 c2p4_bcl07:
-#if defined(__M68020__)
+#if defined(__mc68020__)
 	moveb	a0@+,d0
-	lea	a2@(0,d0:w:4),a3
+	lea		a2@(0,d0:w:4),a3
 #else
 	moveq	#0,d0
 	moveb	a0@+,d0
 	lslw	#2,d0
-	lea	a2@(0,d0:w),a3
+	lea		a2@(0,d0:w),a3
 #endif
 	lsll	#1,d1
-	orl	a3@,d1
+	orl		a3@,d1
 	dbra	d5,c2p4_bcl07
 
 	movepl	d1,a1@(0)
@@ -351,17 +348,17 @@ c2p4_bcl07:
 	moveq	#0,d1
 	moveq	#7,d5
 c2p4_bcl815:
-#if defined(__M68020__)
+#if defined(__mc68020__)
 	moveb	a0@+,d0
-	lea	a2@(0,d0:w:4),a3
+	lea		a2@(0,d0:w:4),a3
 #else
 	moveq	#0,d0
 	moveb	a0@+,d0
 	lslw	#2,d0
-	lea	a2@(0,d0:w),a3
+	lea		a2@(0,d0:w),a3
 #endif
 	lsll	#1,d1
-	orl	a3@,d1
+	orl		a3@,d1
 	dbra	d5,c2p4_bcl815
 
 	movepl	d1,a1@(0)
@@ -373,7 +370,7 @@ c2p4_bcl815:
 	| Double line ?
 
 	tstl	c2p_dblligne
-	beq	c2p4_nodblligne
+	beqs	c2p4_nodblligne
 
 	movel	a5,a6			| src line
 	movel	a5,a1			| dest line
@@ -399,27 +396,29 @@ c2p4_nodblligne:
 	dbra	d7,c2p4_bcly
 
 	moveml	sp@+,d2-d7/a2-a6
+#endif
 	rts
 
 /* ------------	Conversion of a light palette in 4 bits ------------ */
 
 _SDL_Atari_C2pConvert4_pal:
+#if !defined(__mcoldfire__)
 	/* a0 is a 256-word light palette */
 	movel	sp@(4),a0
 
 	moveml	d2-d3,sp@-
 
-	lea	_SDL_Atari_table_c2p,a1
+	lea		_SDL_Atari_table_c2p,a1
 	movew	#255,d3
 c2p_pal_initbcl:
 	movew	a0@+,d0
 	lsrw	#4,d0
-	and	#15,d0
+	andw	#15,d0
 
 	moveq	#3,d1
 c2p_pal_initbyte:
 	btst	d1,d0
-	sne	d2
+	sne		d2
 	negw	d2
 	moveb	d2,a1@(0,d1:w)
 
@@ -429,20 +428,20 @@ c2p_pal_initbyte:
 	dbra	d3,c2p_pal_initbcl
 
 	moveml	sp@+,d2-d3
-
+#endif
 	rts
 
 /* ------------	Buffers ------------ */
 
-	.data
+	.bss
 
 	.even
 	.comm	_SDL_Atari_C2pConvert,4
-	.comm	_SDL_Atari_table_c2p,2048
+	.comm	_SDL_Atari_table_c2p,1024
 
 	.comm	c2p_source,4	/* Source framebuffer */
-	.comm	c2p_dest,4	/* Destination framebuffer */
-	.comm	c2p_width,4	/* Width of zone to convert */
+	.comm	c2p_dest,4		/* Destination framebuffer */
+	.comm	c2p_width,4		/* Width of zone to convert */
 	.comm	c2p_height,4	/* Height of zone to convert */
 	.comm	c2p_dblligne,4	/* Double the lines while converting ? */
 	.comm	c2p_srcpitch,4	/* Source pitch */
@@ -450,4 +449,4 @@ c2p_pal_initbyte:
 	.comm	c2p_cursrc,4	/* Current source line */
 	.comm	c2p_curdst,4	/* Current destination line */
 	.comm	c2p_rowlen,2	/* Line length in bytes */
-	.comm	c2p_row,2	/* Current line number */
+	.comm	c2p_row,2		/* Current line number */

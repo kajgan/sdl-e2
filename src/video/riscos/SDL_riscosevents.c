@@ -1,6 +1,6 @@
 /*
     SDL - Simple DirectMedia Layer
-    Copyright (C) 1997-2004 Sam Lantinga
+    Copyright (C) 1997-2012 Sam Lantinga
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Library General Public
@@ -17,11 +17,12 @@
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
     Sam Lantinga
-    slouken@devolution.com
+    slouken@libsdl.org
 */
+#include "SDL_config.h"
 
 /*
-     File added by Alan Buckley (alan_baa@hotmail.com) for RISCOS compatability
+     File added by Alan Buckley (alan_baa@hotmail.com) for RISC OS compatability
 	 27 March 2003
 
      Implements keyboard setup, event pump and keyboard and mouse polling
@@ -29,12 +30,12 @@
 
 
 #include "SDL.h"
-#include "SDL_sysevents.h"
-#include "SDL_events_c.h"
+#include "../../timer/SDL_timer_c.h"
+#include "../../events/SDL_sysevents.h"
+#include "../../events/SDL_events_c.h"
+#include "../SDL_cursor_c.h"
 #include "SDL_riscosvideo.h"
 #include "SDL_riscosevents_c.h"
-#include "SDL_timer_c.h"
-#include "SDL_cursor_c.h"
 
 #include "memory.h"
 #include "stdlib.h"
@@ -43,10 +44,10 @@
 #include "kernel.h"
 #include "swis.h"
 
-/* The translation table from a RISCOS internal key numbers to a SDL keysym */
+/* The translation table from a RISC OS internal key numbers to a SDL keysym */
 static SDLKey RO_keymap[SDLK_LAST];
 
-/* RISCOS Key codes */
+/* RISC OS Key codes */
 #define ROKEY_SHIFT 0
 #define ROKEY_CTRL  1
 #define ROKEY_ALT   2
@@ -76,18 +77,23 @@ void RISCOS_PollKeyboard();
 
 void RISCOS_PollMouseHelper(_THIS, int fullscreen);
 
+#if SDL_THREADS_DISABLED
 extern void DRenderer_FillBuffers();
 
 /* Timer running function */
 extern void RISCOS_CheckTimer();
+
+#endif
 
 void FULLSCREEN_PumpEvents(_THIS)
 {
     /* Current implementation requires keyboard and mouse polling */
 	RISCOS_PollKeyboard();
 	RISCOS_PollMouse(this);
-	DRenderer_FillBuffers();
+#if SDL_THREADS_DISABLED
+//	DRenderer_FillBuffers();
 	if (SDL_timer_running) RISCOS_CheckTimer();
+#endif
 }
 
 
@@ -96,7 +102,7 @@ void RISCOS_InitOSKeymap(_THIS)
 	int i;
 
 	/* Map the VK keysyms */
-	for ( i=0; i<SDL_TABLESIZE(RO_keymap); ++i )
+	for ( i=0; i<SDL_arraysize(RO_keymap); ++i )
 		RO_keymap[i] = SDLK_UNKNOWN;
 
   RO_keymap[3] = SDLK_LSHIFT;
@@ -205,7 +211,7 @@ void RISCOS_InitOSKeymap(_THIS)
   RO_keymap[123] = SDLK_KP5;
   RO_keymap[124] = SDLK_KP2;
 
-  memset(RO_pressed, 0, ROKEYBD_ARRAYSIZE);
+  SDL_memset(RO_pressed, 0, ROKEYBD_ARRAYSIZE);
 }
 
 
@@ -257,9 +263,11 @@ void RISCOS_PollMouseHelper(_THIS, int fullscreen)
        Sint16 new_x = regs.r[0]; /* Initialy get as OS units */
        Sint16 new_y = regs.r[1];
 
-/* Discard mouse events until the let go of the mouse after starting */
-       if (starting && regs.r[2] != 0) return;
-       else starting = 0;
+       /* Discard mouse events until they let go of the mouse after starting */
+       if (starting && regs.r[2] != 0)
+         return;
+       else
+         starting = 0;
 
        if (new_x != last_x || new_y != last_y || last_buttons != regs.r[2])
        {
@@ -538,3 +546,4 @@ static SDL_keysym *TranslateKey(int intkey, SDL_keysym *keysym, int pressed)
 }
 
 /* end of SDL_riscosevents.c ... */
+

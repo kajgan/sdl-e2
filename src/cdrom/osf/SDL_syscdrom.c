@@ -18,27 +18,24 @@
 
 
 */
+#include "SDL_config.h"
 
+#ifdef SDL_CDROM_OSF
 
 /* Functions for system-level CD-ROM audio control */
 
-//#define DEBUG_CDROM 1
+/* #define DEBUG_CDROM 1 */
 
 #include <sys/types.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <io/cam/cdrom.h>
 #include <io/cam/rzdisk.h>
 #include <io/common/devgetinfo.h>
-#include <alloca.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <errno.h>
 
-#include "SDL_error.h"
 #include "SDL_cdrom.h"
-#include "SDL_syscdrom.h"
+#include "../SDL_syscdrom.h"
 
 /* The maximum number of CD-ROM drives we'll detect */
 #define MAX_DRIVES 16
@@ -59,46 +56,45 @@ static int         SDL_SYS_CDStop(SDL_CD *cdrom);
 static int         SDL_SYS_CDEject(SDL_CD *cdrom);
 static void        SDL_SYS_CDClose(SDL_CD *cdrom);
 
-/* Some ioctl() errno values which occur when the tray is empty */
-#define ERRNO_TRAYEMPTY(errno)	\
-    ((errno == EIO) || (errno == ENOENT) || (errno == EINVAL))
-
 /* Check a drive to see if it is a CD-ROM */
 /* Caution!! Not tested. */ 
 static int CheckDrive(char *drive, struct stat *stbuf)
 {
-    int is_cd, cdfd;
-    struct cd_sub_channel info;
+    int cdfd, is_cd = 0;
+    struct mode_sel_sns_params msp;
+    struct inquiry_info inq;
+
+#ifdef DEBUG_CDROM
+    char *devtype[] = {"Disk", "Tape", "Printer", "Processor", "WORM",
+	"CD-ROM", "Scanner", "Optical", "Changer", "Comm", "Unknown"};
+#endif
+
+    bzero(&msp, sizeof(msp));
+    bzero(&inq, sizeof(inq));
 
     /* If it doesn't exist, return -1 */
     if ( stat(drive, stbuf) < 0 ) {
 	return(-1);
     }
 
-    /* If it does exist, verify that it's an available CD-ROM */
-    is_cd = 0;
-    if ( S_ISCHR(stbuf->st_mode) || S_ISBLK(stbuf->st_mode) ) {
-	cdfd = open(drive, (O_RDWR|O_NDELAY), 0);
-	if ( cdfd >= 0 ) {
-	    info.sch_address_format = CDROM_MSF_FORMAT;
-	    info.sch_data_format = CDROM_CURRENT_POSITION;
-	    info.sch_alloc_length = 0;
-	    info.sch_track_number = 0;
-	    info.sch_buffer = NULL;
-	    /*
-	     *
-	     * Under Linux, EIO occurs when a disk is not present.
-	     * This isn't 100% reliable, so we use the USE_MNTENT
-	     * code above instead.
-	     *
-	     */
-	    if ( (ioctl(cdfd, CDROM_READ_SUBCHANNEL, &info) == 0) ||
-		    ERRNO_TRAYEMPTY(errno) ) {
-		is_cd = 1;
-	    }
+    if ( (cdfd = open(drive, (O_RDWR|O_NDELAY), 0)) >= 0 ) {
+	msp.msp_addr   =   (caddr_t) &inq;
+	msp.msp_pgcode =                0;
+	msp.msp_pgctrl =                0;
+	msp.msp_length =      sizeof(inq);
+	msp.msp_setps  =                0;
 
-	    close(cdfd);
-	}
+	if ( ioctl(cdfd, SCSI_GET_INQUIRY_DATA, &msp) )
+	    return (0);
+
+#ifdef DEBUG_CDROM
+	fprintf(stderr, "Device Type: %s\n", devtype[inq.perfdt]);
+	fprintf(stderr, "Vendor: %.8s\n", inq.vndrid);
+	fprintf(stderr, "Product: %.8s\n", inq.prodid);
+	fprintf(stderr, "Revision: %.8s\n", inq.revlvl);
+#endif
+	if ( inq.perfdt == DTYPE_RODIRECT )
+	    is_cd = 1;
     }
 
     return(is_cd);
@@ -113,7 +109,7 @@ static void AddDrive(char *drive, struct stat *stbuf)
 	/* Check to make sure it's not already in our list.
 	 * This can happen when we see a drive via symbolic link.
 	 *
-	 * /
+	 */
 	for ( i=0; i<SDL_numcds; ++i ) {
 	    if ( stbuf->st_rdev == SDL_cdmode[i] ) {
 #ifdef DEBUG_CDROM
@@ -125,13 +121,11 @@ static void AddDrive(char *drive, struct stat *stbuf)
 
 	/* Add this drive to our list */
 	i = SDL_numcds;
-	SDL_cdlist[i] = (char *)malloc(strlen(drive)+1);
+	SDL_cdlist[i] = SDL_strdup(drive);
 	if ( SDL_cdlist[i] == NULL ) {
 	    SDL_OutOfMemory();
 	    return;
 	}
-
-	strcpy(SDL_cdlist[i], drive);
 	SDL_cdmode[i] = stbuf->st_rdev;
 	++SDL_numcds;
 #ifdef DEBUG_CDROM
@@ -142,12 +136,22 @@ static void AddDrive(char *drive, struct stat *stbuf)
 
 int  SDL_SYS_CDInit(void)
 {
-    /* checklist: /dev/cdrom,/dev/cd?c /dev/acd?c
-     * /dev/matcd?c /dev/mcd?c /dev/scd?c
+    /* checklist:
+     *
+     * Tru64 5.X (/dev/rdisk/cdrom?c)
+     * dir: /dev/rdisk, name: cdrom
+     *
+     * Digital UNIX 4.0X (/dev/rrz?c)
+     * dir: /dev, name: rrz
      *
      */
-    static char *checklist[] = {
-	"?0 rdisk/cdrom?",NULL};
+    struct {
+	char *dir;
+	char *name;
+    } checklist[] = {
+	{"/dev/rdisk", "cdrom"},
+	{"/dev", "rrz"},
+	{NULL, NULL}};
     char drive[32];
     char *SDLcdrom;
     int i, j, exists;
@@ -167,15 +171,16 @@ int  SDL_SYS_CDInit(void)
 
 
     /* Look in the environment for our CD-ROM drive list */
-    SDLcdrom = getenv("SDL_CDROM");	/* ':' separated list of devices */
+    SDLcdrom = SDL_getenv("SDL_CDROM");	/* ':' separated list of devices */
     if ( SDLcdrom != NULL ) {
 	char *cdpath, *delim;
-	cdpath = malloc(strlen(SDLcdrom)+1);
+	size_t len = SDL_strlen(SDLcdrom)+1;
+	cdpath = SDL_stack_alloc(char, len);
 	if ( cdpath != NULL ) {
-	    strcpy(cdpath, SDLcdrom);
+	    SDL_strlcpy(cdpath, SDLcdrom, len);
 	    SDLcdrom = cdpath;
 	    do {
-		delim = strchr(SDLcdrom, ':');
+		delim = SDL_strchr(SDLcdrom, ':');
 		if ( delim ) {
 		    *delim++ = '\0';
 		}
@@ -188,7 +193,7 @@ int  SDL_SYS_CDInit(void)
 		    SDLcdrom = NULL;
 		}
 	    } while ( SDLcdrom );
-	    free(cdpath);
+	    SDL_stack_free(cdpath);
 	}
 
 	/* If we found our drives, there's nothing left to do */
@@ -197,45 +202,31 @@ int  SDL_SYS_CDInit(void)
 	}
     }
     /* Scan the system for CD-ROM drives */
-    for ( i=0; checklist[i]; ++i ) {
-	if ( checklist[i][0] == '?' ) {
-	    char *insert;
-	    exists = 1;
-	    for ( j=checklist[i][1]; exists; ++j ) {
-		sprintf(drive, "/dev/%sc", &checklist[i][3]);
-		insert = strchr(drive, '?');
-		if ( insert != NULL ) {
-		    *insert = j;
-		}
-		switch (CheckDrive(drive, &stbuf)) {
-		    /* Drive exists and is a CD-ROM */
-		    case 1:
-			AddDrive(drive, &stbuf);
-			break;
-			/* Drive exists, but isn't a CD-ROM */
-		    case 0:
-			break;
-			/* Drive doesn't exist */
-		    case -1:
-			exists = 0;
-			break;
-		}
-	    }
+    for ( i = 0; checklist[i].dir; ++i) {
+	DIR *devdir;
+	struct dirent *devent;
+	int name_len;
+
+	devdir = opendir(checklist[i].dir);
+	if (devdir) {
+	    name_len = SDL_strlen(checklist[i].name);
+	    while (devent = readdir(devdir))
+		if (SDL_memcmp(checklist[i].name, devent->d_name, name_len) == 0)
+		    if (devent->d_name[devent->d_namlen-1] == 'c') {
+			SDL_snprintf(drive, SDL_arraysize(drive), "%s/%s", checklist[i].dir, devent->d_name);
+#ifdef DEBUG_CDROM
+			fprintf(stderr, "Try to add drive: %s\n", drive);
+#endif
+			if ( CheckDrive(drive, &stbuf) > 0 )
+			    AddDrive(drive, &stbuf);
+		    }
+	    closedir(devdir);
 	} else {
-	    sprintf(drive, "/dev/%s", checklist[i]);
-	    if ( CheckDrive(drive, &stbuf) > 0 ) {
-		AddDrive(drive, &stbuf);
-	    }
+#ifdef DEBUG_CDROM
+	    fprintf(stderr, "cannot open dir: %s\n", checklist[i].dir);
+#endif
 	}
     }
-/*
-    SDLcdrom=malloc(sizeof(char) * 32);
-    strcpy(SDLcdrom,"/dev/rdisk/cdrom0c");
-    SDL_cdlist[0] = SDLcdrom;
-    stat(SDLcdrom, &stbuf);
-    SDL_cdmode[0] = stbuf.st_rdev;
-    SDL_numcds = 1;
- */
     return (0);
 }
 
@@ -287,28 +278,28 @@ static int SDL_SYS_CDGetTOC(SDL_CD *cdrom)
 	return -1;
     }
 
-    (char *)cdte = toc.toc_buffer + sizeof(hdr);
-	for (i=0; i <= cdrom->numtracks; ++i) {
-	    if (i == cdrom->numtracks ) {
-		cdrom->track[i].id = 0xAA;;
-	    } else {
-		cdrom->track[i].id = hdr.th_starting_track + i;
-	    }
-
-	    cdrom->track[i].type =
-		cdte[i].te_control & CDROM_DATA_TRACK;
-	    cdrom->track[i].offset =
-		cdte[i].te_absaddr.lba.addr3 << 24 |
-		cdte[i].te_absaddr.lba.addr2 << 16 |
-		cdte[i].te_absaddr.lba.addr1 << 8  |
-		cdte[i].te_absaddr.lba.addr0;
-	    cdrom->track[i].length = 0;
-	    if ( i > 0 ) {
-		cdrom->track[i - 1].length =
-		    cdrom->track[i].offset -
-		    cdrom->track[i - 1].offset;
-	    }
+    cdte =(struct cd_toc_entry *) ((char *) toc.toc_buffer + sizeof(hdr));
+    for (i=0; i <= cdrom->numtracks; ++i) {
+	if (i == cdrom->numtracks ) {
+	    cdrom->track[i].id = 0xAA;;
+	} else {
+	    cdrom->track[i].id = hdr.th_starting_track + i;
 	}
+
+	cdrom->track[i].type =
+	    cdte[i].te_control & CDROM_DATA_TRACK;
+	cdrom->track[i].offset =
+	    cdte[i].te_absaddr.lba.addr3 << 24 |
+	    cdte[i].te_absaddr.lba.addr2 << 16 |
+	    cdte[i].te_absaddr.lba.addr1 << 8  |
+	    cdte[i].te_absaddr.lba.addr0;
+	cdrom->track[i].length = 0;
+	if ( i > 0 ) {
+	    cdrom->track[i - 1].length =
+		cdrom->track[i].offset -
+		cdrom->track[i - 1].offset;
+	}
+    }
 #ifdef DEBUG_CDROM
   for (i = 0; i <= cdrom->numtracks; i++) {
     fprintf(stderr,"toc_entry[%d].te_track_number = %d\n",
@@ -388,19 +379,19 @@ static CDstatus SDL_SYS_CDStatus(SDL_CD *cdrom, int *position)
 /* Start play */
 static int SDL_SYS_CDPlay(SDL_CD *cdrom, int start, int length)
 {
-/* Play MSF
- *
+/*
+ * Play MSF
  */
     struct cd_play_audio_msf msf;
     int end;
 
     bzero(&msf, sizeof(msf));
     end = start +length;
-    FRAMES_TO_MSF(start,
+    FRAMES_TO_MSF(start + 150, /* LBA = 4500*M + 75*S + F - 150 */
 		  &msf.msf_starting_M_unit,
 		  &msf.msf_starting_S_unit,
 		  &msf.msf_starting_F_unit);
-    FRAMES_TO_MSF(end,
+    FRAMES_TO_MSF(end + 150, /* LBA = 4500*M + 75*S + F - 150 */
 		  &msf.msf_ending_M_unit,
 		  &msf.msf_ending_S_unit,
 		  &msf.msf_ending_F_unit);
@@ -444,10 +435,10 @@ void SDL_SYS_CDQuit(void)
 
     if ( SDL_numcds > 0 ) {
 	for ( i=0; i<SDL_numcds; ++i ) {
-	    free(SDL_cdlist[i]);
+	    SDL_free(SDL_cdlist[i]);
 	}
 	SDL_numcds = 0;
     }
 }
 
-
+#endif /* SDL_CDROM_OSF */

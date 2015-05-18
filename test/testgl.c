@@ -5,6 +5,10 @@
 
 #include "SDL.h"
 
+#ifdef __MACOS__
+#define HAVE_OPENGL
+#endif
+
 #ifdef HAVE_OPENGL
 
 #include "SDL_opengl.h"
@@ -23,6 +27,7 @@ static SDL_bool USE_DEPRECATED_OPENGLBLIT = SDL_FALSE;
 
 static SDL_Surface *global_image = NULL;
 static GLuint global_texture = 0;
+static GLuint cursor_texture = 0;
 
 /**********************************************************************/
 
@@ -237,6 +242,59 @@ GLuint SDL_GL_LoadTexture(SDL_Surface *surface, GLfloat *texcoord)
 	return texture;
 }
 
+void DrawLogoCursor(void)
+{
+	static GLfloat texMinX, texMinY;
+	static GLfloat texMaxX, texMaxY;
+	static int w, h;
+	int x, y;
+
+	if ( ! cursor_texture ) {
+		SDL_Surface *image;
+		GLfloat texcoord[4];
+
+		/* Load the image (could use SDL_image library here) */
+		image = SDL_LoadBMP(LOGO_FILE);
+		if ( image == NULL ) {
+			return;
+		}
+		w = image->w;
+		h = image->h;
+
+		/* Convert the image into an OpenGL texture */
+		cursor_texture = SDL_GL_LoadTexture(image, texcoord);
+
+		/* Make texture coordinates easy to understand */
+		texMinX = texcoord[0];
+		texMinY = texcoord[1];
+		texMaxX = texcoord[2];
+		texMaxY = texcoord[3];
+
+		/* We don't need the original image anymore */
+		SDL_FreeSurface(image);
+
+		/* Make sure that the texture conversion is okay */
+		if ( ! cursor_texture ) {
+			return;
+		}
+	}
+
+	/* Move the image around */
+	SDL_GetMouseState(&x, &y);
+	x -= w/2;
+	y -= h/2;
+
+	/* Show the image on the screen */
+	SDL_GL_Enter2DMode();
+	glBindTexture(GL_TEXTURE_2D, cursor_texture);
+	glBegin(GL_TRIANGLE_STRIP);
+	glTexCoord2f(texMinX, texMinY); glVertex2i(x,   y  );
+	glTexCoord2f(texMaxX, texMinY); glVertex2i(x+w, y  );
+	glTexCoord2f(texMinX, texMaxY); glVertex2i(x,   y+h);
+	glTexCoord2f(texMaxX, texMaxY); glVertex2i(x+w, y+h);
+	glEnd();
+	SDL_GL_Leave2DMode();
+}
 
 void DrawLogoTexture(void)
 {
@@ -247,7 +305,6 @@ void DrawLogoTexture(void)
 	static int w, h;
 	static int delta_x = 1;
 	static int delta_y = 1;
-	static Uint32 last_moved = 0;
 
 	SDL_Surface *screen = SDL_GetVideoSurface();
 
@@ -321,7 +378,6 @@ void DrawLogoBlit(void)
 	static int w, h;
 	static int delta_x = 1;
 	static int delta_y = 1;
-	static Uint32 last_moved = 0;
 
 	SDL_Rect dst;
 	SDL_Surface *screen = SDL_GetVideoSurface();
@@ -393,7 +449,7 @@ void DrawLogoBlit(void)
 }
 
 int RunGLTest( int argc, char* argv[],
-               int logo, int slowly, int bpp, float gamma, int noframe, int fsaa )
+               int logo, int logocursor, int slowly, int bpp, float gamma, int noframe, int fsaa, int sync, int accel )
 {
 	int i;
 	int rgb_size[3];
@@ -442,7 +498,7 @@ int RunGLTest( int argc, char* argv[],
 		video_flags = SDL_OPENGL;
 	}
 	for ( i=1; argv[i]; ++i ) {
-		if ( strcmp(argv[1], "-fullscreen") == 0 ) {
+		if ( strcmp(argv[i], "-fullscreen") == 0 ) {
 			video_flags |= SDL_FULLSCREEN;
 		}
 	}
@@ -479,6 +535,14 @@ int RunGLTest( int argc, char* argv[],
 		SDL_GL_SetAttribute( SDL_GL_MULTISAMPLEBUFFERS, 1 );
 		SDL_GL_SetAttribute( SDL_GL_MULTISAMPLESAMPLES, fsaa );
 	}
+	if ( accel ) {
+		SDL_GL_SetAttribute( SDL_GL_ACCELERATED_VISUAL, 1 );
+	}
+	if ( sync ) {
+		SDL_GL_SetAttribute( SDL_GL_SWAP_CONTROL, 1 );
+	} else {
+		SDL_GL_SetAttribute( SDL_GL_SWAP_CONTROL, 0 );
+	}
 	if ( SDL_SetVideoMode( w, h, bpp, video_flags ) == NULL ) {
 		fprintf(stderr, "Couldn't set GL mode: %s\n", SDL_GetError());
 		SDL_Quit();
@@ -505,9 +569,17 @@ int RunGLTest( int argc, char* argv[],
 	printf( "SDL_GL_DOUBLEBUFFER: requested 1, got %d\n", value );
 	if ( fsaa ) {
 		SDL_GL_GetAttribute( SDL_GL_MULTISAMPLEBUFFERS, &value );
-		printf( "SDL_GL_MULTISAMPLEBUFFERS: requested 1, got %d\n", value );
+		printf("SDL_GL_MULTISAMPLEBUFFERS: requested 1, got %d\n", value );
 		SDL_GL_GetAttribute( SDL_GL_MULTISAMPLESAMPLES, &value );
-		printf( "SDL_GL_MULTISAMPLESAMPLES: requested %d, got %d\n", fsaa, value );
+		printf("SDL_GL_MULTISAMPLESAMPLES: requested %d, got %d\n", fsaa, value );
+	}
+	if ( accel ) {
+		SDL_GL_GetAttribute( SDL_GL_ACCELERATED_VISUAL, &value );
+		printf( "SDL_GL_ACCELERATED_VISUAL: requested 1, got %d\n", value );
+	}
+	if ( sync ) {
+		SDL_GL_GetAttribute( SDL_GL_SWAP_CONTROL, &value );
+		printf( "SDL_GL_SWAP_CONTROL: requested 1, got %d\n", value );
 	}
 
 	/* Set the window manager title bar */
@@ -601,7 +673,7 @@ int RunGLTest( int argc, char* argv[],
 			glVertex3fv(cube[2]);
 			glColor3fv(color[7]);
 			glVertex3fv(cube[7]);
-#else // flat cube
+#else /* flat cube */
 			glColor3f(1.0, 0.0, 0.0);
 			glVertex3fv(cube[0]);
 			glVertex3fv(cube[1]);
@@ -652,6 +724,9 @@ int RunGLTest( int argc, char* argv[],
 				DrawLogoTexture();
 			}
 		}
+		if ( logocursor ) {
+			DrawLogoCursor();
+		}
 
 		SDL_GL_SwapBuffers( );
 
@@ -696,6 +771,10 @@ int RunGLTest( int argc, char* argv[],
 		glDeleteTextures( 1, &global_texture );
 		global_texture = 0;
 	}
+	if ( cursor_texture ) {
+		glDeleteTextures( 1, &cursor_texture );
+		cursor_texture = 0;
+	}
 
 	/* Destroy our GL context, etc. */
 	SDL_Quit( );
@@ -704,13 +783,15 @@ int RunGLTest( int argc, char* argv[],
 
 int main(int argc, char *argv[])
 {
-	int i, logo;
+	int i, logo, logocursor = 0;
 	int numtests;
 	int bpp = 0;
 	int slowly;
 	float gamma = 0.0;
 	int noframe = 0;
 	int fsaa = 0;
+	int accel = 0;
+	int sync = 0;
 
 	logo = 0;
 	slowly = 0;
@@ -727,6 +808,9 @@ int main(int argc, char *argv[])
 			logo = 1;
 			USE_DEPRECATED_OPENGLBLIT = SDL_TRUE;
 		}
+		if ( strcmp(argv[i], "-logocursor") == 0 ) {
+			logocursor = 1;
+		}
 		if ( strcmp(argv[i], "-slow") == 0 ) {
 			slowly = 1;
 		}
@@ -742,15 +826,21 @@ int main(int argc, char *argv[])
 		if ( strcmp(argv[i], "-fsaa") == 0 ) {
  		       ++fsaa;
 		}
+		if ( strcmp(argv[i], "-accel") == 0 ) {
+ 		       ++accel;
+		}
+		if ( strcmp(argv[i], "-sync") == 0 ) {
+ 		       ++sync;
+		}
 		if ( strncmp(argv[i], "-h", 2) == 0 ) {
  		       printf(
-"Usage: %s [-twice] [-logo] [-slow] [-bpp n] [-gamma n] [-noframe] [-fsaa]\n",
+"Usage: %s [-twice] [-logo] [-logocursor] [-slow] [-bpp n] [-gamma n] [-noframe] [-fsaa] [-accel] [-sync] [-fullscreen]\n",
  			      argv[0]);
 			exit(0);
 		}
 	}
 	for ( i=0; i<numtests; ++i ) {
- 		RunGLTest(argc, argv, logo, slowly, bpp, gamma, noframe, fsaa);
+ 		RunGLTest(argc, argv, logo, logocursor, slowly, bpp, gamma, noframe, fsaa, sync, accel);
 	}
 	return 0;
 }

@@ -9,8 +9,6 @@
 
 #include "SDL.h"
 
-#define DEBUG_FLIP 1
-
 #define NUM_SPRITES	100
 #define MAX_SPEED 	1
 
@@ -20,9 +18,17 @@ SDL_Rect *sprite_rects;
 SDL_Rect *positions;
 SDL_Rect *velocities;
 int sprites_visible;
+int debug_flip;
 Uint16 sprite_w, sprite_h;
 
-int LoadSprite(SDL_Surface *screen, char *file)
+/* Call this instead of exit(), so we can clean up SDL: atexit() is evil. */
+static void quit(int rc)
+{
+	SDL_Quit();
+	exit(rc);
+}
+
+int LoadSprite(char *file)
 {
 	SDL_Surface *temp;
 
@@ -85,24 +91,22 @@ void MoveSprites(SDL_Surface *screen, Uint32 background)
 		sprite_rects[nupdates++] = area;
 	}
 
-#if DEBUG_FLIP
-    {
-	if ( (screen->flags & SDL_DOUBLEBUF) == SDL_DOUBLEBUF ) {
-            static int t = 0;
+	if (debug_flip) {
+		if ( (screen->flags & SDL_DOUBLEBUF) == SDL_DOUBLEBUF ) {
+			static int t = 0;
 
-            Uint32 color = SDL_MapRGB (screen->format, 255, 0, 0);
-            SDL_Rect r;
-            r.x = (sin((float)t * 2 * 3.1459) + 1.0) / 2.0 * (screen->w-20);
-            r.y = 0;
-            r.w = 20;
-            r.h = screen->h;
-        
-            SDL_FillRect (screen, &r, color);
-            t+=2;
-        }
-    }
-#endif
-    
+			Uint32 color = SDL_MapRGB (screen->format, 255, 0, 0);
+			SDL_Rect r;
+			r.x = (sin((float)t * 2 * 3.1459) + 1.0) / 2.0 * (screen->w-20);
+			r.y = 0;
+			r.w = 20;
+			r.h = screen->h;
+
+			SDL_FillRect (screen, &r, color);
+			t+=2;
+		}
+	}
+
 	/* Update the screen! */
 	if ( (screen->flags & SDL_DOUBLEBUF) == SDL_DOUBLEBUF ) {
 		SDL_Flip(screen);
@@ -159,15 +163,15 @@ int main(int argc, char *argv[])
 	/* Initialize SDL */
 	if ( SDL_Init(SDL_INIT_VIDEO) < 0 ) {
 		fprintf(stderr, "Couldn't initialize SDL: %s\n",SDL_GetError());
-		exit(1);
+		return(1);
 	}
-	atexit(SDL_Quit);
 
 	numsprites = NUM_SPRITES;
 	videoflags = SDL_SWSURFACE|SDL_ANYFORMAT;
 	width = 640;
 	height = 480;
 	video_bpp = 8;
+	debug_flip = 0;
 	while ( argc > 1 ) {
 		--argc;
 		if ( strcmp(argv[argc-1], "-width") == 0 ) {
@@ -192,6 +196,9 @@ int main(int argc, char *argv[])
 		if ( strcmp(argv[argc], "-flip") == 0 ) {
 			videoflags ^= SDL_DOUBLEBUF;
 		} else
+		if ( strcmp(argv[argc], "-debugflip") == 0 ) {
+			debug_flip ^= 1;
+		} else
 		if ( strcmp(argv[argc], "-fullscreen") == 0 ) {
 			videoflags ^= SDL_FULLSCREEN;
 		} else
@@ -201,7 +208,7 @@ int main(int argc, char *argv[])
 			fprintf(stderr, 
 	"Usage: %s [-bpp N] [-hw] [-flip] [-fast] [-fullscreen] [numsprites]\n",
 								argv[0]);
-			exit(1);
+			quit(1);
 		}
 	}
 
@@ -210,12 +217,12 @@ int main(int argc, char *argv[])
 	if ( ! screen ) {
 		fprintf(stderr, "Couldn't set %dx%d video mode: %s\n",
 					width, height, SDL_GetError());
-		exit(2);
+		quit(2);
 	}
 
 	/* Load the sprite */
-	if ( LoadSprite(screen, "icon.bmp") < 0 ) {
-		exit(1);
+	if ( LoadSprite("icon.bmp") < 0 ) {
+		quit(1);
 	}
 
 	/* Allocate memory for the sprite info */
@@ -223,7 +230,7 @@ int main(int argc, char *argv[])
 	if ( mem == NULL ) {
 		SDL_FreeSurface(sprite);
 		fprintf(stderr, "Out of memory!\n");
-		exit(2);
+		quit(2);
 	}
 	sprite_rects = (SDL_Rect *)mem;
 	positions = sprite_rects;

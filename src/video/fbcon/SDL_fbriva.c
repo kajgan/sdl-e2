@@ -1,33 +1,28 @@
 /*
-	SDL - Simple DirectMedia Layer
-    Copyright (C) 1997-2004 Sam Lantinga
+    SDL - Simple DirectMedia Layer
+    Copyright (C) 1997-2012 Sam Lantinga
 
-	This library is free software; you can redistribute it and/or
-	modify it under the terms of the GNU Library General Public
-	License as published by the Free Software Foundation; either
-	version 2 of the License, or (at your option) any later version.
+    This library is free software; you can redistribute it and/or
+    modify it under the terms of the GNU Lesser General Public
+    License as published by the Free Software Foundation; either
+    version 2.1 of the License, or (at your option) any later version.
 
-	This library is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-	Library General Public License for more details.
+    This library is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+    Lesser General Public License for more details.
 
-	You should have received a copy of the GNU Library General Public
-	License along with this library; if not, write to the Free
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+    You should have received a copy of the GNU Lesser General Public
+    License along with this library; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-	Sam Lantinga
-	slouken@libsdl.org
+    Sam Lantinga
+    slouken@libsdl.org
 */
+#include "SDL_config.h"
 
-#ifdef SAVE_RCSID
-static char rcsid =
- "@(#) $Id: SDL_fbriva.c,v 1.5 2004/01/04 16:49:25 slouken Exp $";
-#endif
-
-#include "SDL_types.h"
 #include "SDL_video.h"
-#include "SDL_blit.h"
+#include "../SDL_blit.h"
 #include "SDL_fbriva.h"
 #include "riva_mmio.h"
 #include "riva_regs.h"
@@ -61,6 +56,7 @@ static void NV4WaitIdle(_THIS)
 		;
 }
 
+#if 0 /* Not yet implemented? */
 /* Sets video mem colorkey and accelerated blit function */
 static int SetHWColorKey(_THIS, SDL_Surface *surface, Uint32 key)
 {
@@ -72,6 +68,7 @@ static int SetHWAlpha(_THIS, SDL_Surface *surface, Uint8 value)
 {
 	return(0);
 }
+#endif /* Not yet implemented */
 
 static int FillHWRect(_THIS, SDL_Surface *dst, SDL_Rect *rect, Uint32 color)
 {
@@ -80,6 +77,9 @@ static int FillHWRect(_THIS, SDL_Surface *dst, SDL_Rect *rect, Uint32 color)
 	RivaBitmap *Bitmap = (RivaBitmap *)(mapped_io + BITMAP_OFFSET);
 
 	/* Don't blit to the display surface when switched away */
+	if ( switched_away ) {
+		return -2; /* no hardware access */
+	}
 	if ( dst == this->screen ) {
 		SDL_mutexP(hw_lock);
 	}
@@ -123,6 +123,9 @@ static int HWAccelBlit(SDL_Surface *src, SDL_Rect *srcrect,
 	}
 
 	/* Don't blit to the display surface when switched away */
+	if ( switched_away ) {
+		return -2; /* no hardware access */
+	}
 	if ( dst == this->screen ) {
 		SDL_mutexP(hw_lock);
 	}

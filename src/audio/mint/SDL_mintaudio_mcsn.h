@@ -1,6 +1,6 @@
 /*
     SDL - Simple DirectMedia Layer
-    Copyright (C) 1997-2004 Sam Lantinga
+    Copyright (C) 1997-2012 Sam Lantinga
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Library General Public
@@ -19,6 +19,7 @@
     Sam Lantinga
     slouken@libsdl.org
 */
+#include "SDL_config.h"
 
 /*
 	MCSN control structure
@@ -43,7 +44,7 @@ typedef struct {
 	unsigned long res2;
 	unsigned long res3;
 	unsigned long res4;
-} cookie_mcsn_t __attribute__((packed));
+} cookie_mcsn_t;
 
 enum {
 	MCSN_ST=0,

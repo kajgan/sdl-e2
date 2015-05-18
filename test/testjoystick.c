@@ -160,6 +160,16 @@ int main(int argc, char *argv[])
 	for ( i=0; i<SDL_NumJoysticks(); ++i ) {
 		name = SDL_JoystickName(i);
 		printf("Joystick %d: %s\n",i,name ? name : "Unknown Joystick");
+		joystick = SDL_JoystickOpen(i);
+		if (joystick == NULL) {
+			fprintf(stderr, "SDL_JoystickOpen(%d) failed: %s\n", i, SDL_GetError());
+		} else {
+			printf("       axes: %d\n", SDL_JoystickNumAxes(joystick));
+			printf("      balls: %d\n", SDL_JoystickNumBalls(joystick));
+			printf("       hats: %d\n", SDL_JoystickNumHats(joystick));
+			printf("    buttons: %d\n", SDL_JoystickNumButtons(joystick));
+			SDL_JoystickClose(joystick);
+		}
 	}
 
 	if ( argv[1] ) {

@@ -13,17 +13,18 @@
 static SDL_sem *sem;
 int alive = 1;
 
-int ThreadFunc(void *data)
+int SDLCALL ThreadFunc(void *data)
 {
+	int threadnum = (int)(uintptr_t)data;
 	while ( alive ) {
 		SDL_SemWait(sem);
-		fprintf(stderr, "Thread number %d has got the semaphore (value = %d)!\n", (int)data, SDL_SemValue(sem));
+		fprintf(stderr, "Thread number %d has got the semaphore (value = %d)!\n", threadnum, SDL_SemValue(sem));
 		SDL_Delay(200);
 		SDL_SemPost(sem);
-		fprintf(stderr, "Thread number %d has released the semaphore (value = %d)!\n", (int)data, SDL_SemValue(sem));
+		fprintf(stderr, "Thread number %d has released the semaphore (value = %d)!\n", threadnum, SDL_SemValue(sem));
 		SDL_Delay(1); /* For the scheduler */
 	}
-	printf("Thread number %d exiting.\n", (int)data);
+	printf("Thread number %d exiting.\n", threadnum);
 	return 0;
 }
 
@@ -32,22 +33,44 @@ static void killed(int sig)
 	alive = 0;
 }
 
+static void TestWaitTimeout(void)
+{
+	Uint32 start_ticks;
+	Uint32 end_ticks;
+	Uint32 duration;
+
+	sem = SDL_CreateSemaphore(0);
+	printf("Waiting 2 seconds on semaphore\n");
+
+	start_ticks = SDL_GetTicks();
+	SDL_SemWaitTimeout(sem, 2000);
+	end_ticks = SDL_GetTicks();
+
+	duration = end_ticks - start_ticks;
+	
+	/* Accept a little offset in the effective wait */
+	if (duration > 1900 && duration < 2050)
+		printf("Wait done.\n");
+	else
+		fprintf(stderr, "Wait took %d milliseconds\n", duration);
+}
+
 int main(int argc, char **argv)
 {
 	SDL_Thread *threads[NUM_THREADS];
-	int i, init_sem;
+	uintptr_t i;
+	int init_sem;
 
 	if(argc < 2) {
 		fprintf(stderr,"Usage: %s init_value\n", argv[0]);
-		exit(1);
+		return(1);
 	}
 
 	/* Load the SDL library */
 	if ( SDL_Init(0) < 0 ) {
 		fprintf(stderr, "Couldn't initialize SDL: %s\n",SDL_GetError());
-		exit(1);
+		return(1);
 	}
-	atexit(SDL_Quit);
 	signal(SIGTERM, killed);
 	signal(SIGINT, killed);
 	
@@ -72,5 +95,9 @@ int main(int argc, char **argv)
 	printf("Finished waiting for threads\n");
 
 	SDL_DestroySemaphore(sem);
+
+	TestWaitTimeout();
+
+	SDL_Quit();
 	return(0);
 }

@@ -1,6 +1,6 @@
 /*
 	SDL - Simple DirectMedia Layer
-    Copyright (C) 1997-2004 Sam Lantinga
+    Copyright (C) 1997-2012 Sam Lantinga
 
 	This library is free software; you can redistribute it and/or
 	modify it under the terms of the GNU Library General Public
@@ -19,15 +19,15 @@
 	Sam Lantinga
 	slouken@libsdl.org
 */
+#include "SDL_config.h"
 
-/* SDL joystick driver for Darwin / MacOS X, based on the IOKit HID API */
+#ifdef SDL_JOYSTICK_IOKIT
+
+/* SDL joystick driver for Darwin / Mac OS X, based on the IOKit HID API */
 /* Written 2001 by Max Horn */
 
-#include <stdio.h>
-#include <stdlib.h>
 #include <unistd.h>
 #include <ctype.h>
-#include <sys/errno.h>
 #include <sysexits.h>
 #include <mach/mach.h>
 #include <mach/mach_error.h>
@@ -36,7 +36,7 @@
 #ifdef MACOS_10_0_4
 #include <IOKit/hidsystem/IOHIDUsageTables.h>
 #else
-/* The header was moved here in MacOS X 10.1 */
+/* The header was moved here in Mac OS X 10.1 */
 #include <Kernel/IOKit/hidsystem/IOHIDUsageTables.h>
 #endif
 #include <IOKit/hid/IOHIDLib.h>
@@ -44,55 +44,57 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <Carbon/Carbon.h> /* for NewPtrClear, DisposePtr */
 
-#include "SDL_error.h"
 #include "SDL_joystick.h"
-#include "SDL_sysjoystick.h"
-#include "SDL_joystick_c.h"
+#include "../SDL_sysjoystick.h"
+#include "../SDL_joystick_c.h"
 
 struct recElement
 {
-	IOHIDElementCookie cookie;				// unique value which identifies element, will NOT change
-	long min;								// reported min value possible
-	long max;								// reported max value possible
-/*
-	TODO: maybe should handle the following stuff somehow?
+	IOHIDElementCookie cookie;				/* unique value which identifies element, will NOT change */
+	long min;								/* reported min value possible */
+	long max;								/* reported max value possible */
+#if 0
+	/* TODO: maybe should handle the following stuff somehow? */
 
-	long scaledMin;							// reported scaled min value possible
-	long scaledMax;							// reported scaled max value possible
-	long size;								// size in bits of data return from element
-	Boolean relative;						// are reports relative to last report (deltas)
-	Boolean wrapping;						// does element wrap around (one value higher than max is min)
-	Boolean nonLinear;						// are the values reported non-linear relative to element movement
-	Boolean preferredState;					// does element have a preferred state (such as a button)
-	Boolean nullState;						// does element have null state
-*/
+	long scaledMin;							/* reported scaled min value possible */
+	long scaledMax;							/* reported scaled max value possible */
+	long size;								/* size in bits of data return from element */
+	Boolean relative;						/* are reports relative to last report (deltas) */
+	Boolean wrapping;						/* does element wrap around (one value higher than max is min) */
+	Boolean nonLinear;						/* are the values reported non-linear relative to element movement */
+	Boolean preferredState;					/* does element have a preferred state (such as a button) */
+	Boolean nullState;						/* does element have null state */
+#endif /* 0 */
 
 	/* runtime variables used for auto-calibration */
-	long minReport;							// min returned value
-	long maxReport;							// max returned value
+	long minReport;							/* min returned value */
+	long maxReport;							/* max returned value */
 	
-	struct recElement * pNext;				// next element in list
+	struct recElement * pNext;				/* next element in list */
 };
 typedef struct recElement recElement;
 
 struct joystick_hwdata
 {
-	IOHIDDeviceInterface ** interface;		// interface to device, NULL = no interface
+	IOHIDDeviceInterface ** interface;		/* interface to device, NULL = no interface */
 
-	char product[256];							// name of product
-	long usage;								// usage page from IOUSBHID Parser.h which defines general usage
-	long usagePage;							// usage within above page from IOUSBHID Parser.h which defines specific usage
+	char product[256];							/* name of product */
+	long usage;								/* usage page from IOUSBHID Parser.h which defines general usage */
+	long usagePage;							/* usage within above page from IOUSBHID Parser.h which defines specific usage */
 
-	long axes;								// number of axis (calculated, not reported by device)
-	long buttons;							// number of buttons (calculated, not reported by device)
-	long hats;								// number of hat switches (calculated, not reported by device)
-	long elements;							// number of total elements (shouldbe total of above) (calculated, not reported by device)
+	long axes;								/* number of axis (calculated, not reported by device) */
+	long buttons;							/* number of buttons (calculated, not reported by device) */
+	long hats;								/* number of hat switches (calculated, not reported by device) */
+	long elements;							/* number of total elements (shouldbe total of above) (calculated, not reported by device) */
 
 	recElement* firstAxis;
 	recElement* firstButton;
 	recElement* firstHat;
 
-	struct joystick_hwdata* pNext;			// next device
+	int removed;
+	int uncentered;
+
+	struct joystick_hwdata* pNext;			/* next device */
 };
 typedef struct joystick_hwdata recDevice;
 
@@ -101,7 +103,7 @@ typedef struct joystick_hwdata recDevice;
 static recDevice *gpDeviceList = NULL;
 
 
-void HIDReportErrorNum (char * strError, long numError)
+static void HIDReportErrorNum (char * strError, long numError)
 {
 	SDL_SetError(strError);
 }
@@ -112,7 +114,7 @@ static void HIDGetCollectionElements (CFMutableDictionaryRef deviceProperties, r
  * will return 0 on error conditions which should be accounted for by application
  */
 
-SInt32 HIDGetElementValue (recDevice *pDevice, recElement *pElement)
+static SInt32 HIDGetElementValue (recDevice *pDevice, recElement *pElement)
 {
 	IOReturn result = kIOReturnSuccess;
 	IOHIDEventStruct hidEvent;
@@ -131,41 +133,39 @@ SInt32 HIDGetElementValue (recDevice *pDevice, recElement *pElement)
 		}
 	}
 
-	// auto user scale
+	/* auto user scale */
 	return hidEvent.value;
 }
 
-/* similiar to HIDGetElementValue, but auto-calibrates the value before returning it */
-
-SInt32 HIDCalibratedValue (recDevice *pDevice, recElement *pElement)
-{
-	float deviceScale = pElement->max - pElement->min;
-	float readScale = pElement->maxReport - pElement->minReport;
-	SInt32 value = HIDGetElementValue(pDevice, pElement);
-	if (readScale == 0)
-		return value; // no scaling at all
-	else
-		return ((value - pElement->minReport) * deviceScale / readScale) + pElement->min;
-}
-
-/* similiar to HIDCalibratedValue but calibrates to an arbitrary scale instead of the elements default scale */
-
-SInt32 HIDScaledCalibratedValue (recDevice *pDevice, recElement *pElement, long min, long max)
+static SInt32 HIDScaledCalibratedValue (recDevice *pDevice, recElement *pElement, long min, long max)
 {
 	float deviceScale = max - min;
 	float readScale = pElement->maxReport - pElement->minReport;
 	SInt32 value = HIDGetElementValue(pDevice, pElement);
 	if (readScale == 0)
-		return value; // no scaling at all
+		return value; /* no scaling at all */
 	else
 		return ((value - pElement->minReport) * deviceScale / readScale) + min;
 }
+
+
+static void HIDRemovalCallback(void * target,
+                               IOReturn result,
+                               void * refcon,
+                               void * sender)
+{
+	recDevice *device = (recDevice *) refcon;
+	device->removed = 1;
+	device->uncentered = 1;
+}
+
+
 
 /* Create and open an interface to device, required prior to extracting values or building queues.
  * Note: appliction now owns the device and must close and release it prior to exiting
  */
 
-IOReturn HIDCreateOpenDeviceInterface (io_object_t hidDevice, recDevice *pDevice)
+static IOReturn HIDCreateOpenDeviceInterface (io_object_t hidDevice, recDevice *pDevice)
 {
 	IOReturn result = kIOReturnSuccess;
 	HRESULT plugInResult = S_OK;
@@ -178,7 +178,7 @@ IOReturn HIDCreateOpenDeviceInterface (io_object_t hidDevice, recDevice *pDevice
 													kIOCFPlugInInterfaceID, &ppPlugInInterface, &score);
 		if (kIOReturnSuccess == result)
 		{
-			// Call a method of the intermediate plug-in to create the device interface
+			/* Call a method of the intermediate plug-in to create the device interface */
 			plugInResult = (*ppPlugInInterface)->QueryInterface (ppPlugInInterface,
 								CFUUIDGetUUIDBytes (kIOHIDDeviceInterfaceID), (void *) &(pDevice->interface));
 			if (S_OK != plugInResult)
@@ -193,6 +193,9 @@ IOReturn HIDCreateOpenDeviceInterface (io_object_t hidDevice, recDevice *pDevice
 		result = (*(pDevice->interface))->open (pDevice->interface, 0);
 		if (kIOReturnSuccess != result)
 			HIDReportErrorNum ("Failed to open pDevice->interface via open.", result);
+		else
+			(*(pDevice->interface))->setRemovalCallback (pDevice->interface, HIDRemovalCallback, pDevice, pDevice);
+
 	}
 	return result;
 }
@@ -203,21 +206,21 @@ IOReturn HIDCreateOpenDeviceInterface (io_object_t hidDevice, recDevice *pDevice
  * (device may have to be plug and re-plugged in different location to get it working again without a restart)
  */
 
-IOReturn HIDCloseReleaseInterface (recDevice *pDevice)
+static IOReturn HIDCloseReleaseInterface (recDevice *pDevice)
 {
 	IOReturn result = kIOReturnSuccess;
 	
 	if ((NULL != pDevice) && (NULL != pDevice->interface))
 	{
-		// close the interface
+		/* close the interface */
 		result = (*(pDevice->interface))->close (pDevice->interface);
 		if (kIOReturnNotOpen == result)
 		{
-			//  do nothing as device was not opened, thus can't be closed
+			/* do nothing as device was not opened, thus can't be closed */
 		}
 		else if (kIOReturnSuccess != result)
 			HIDReportErrorNum ("Failed to close IOHIDDeviceInterface.", result);
-		//release the interface
+		/* release the interface */
 		result = (*(pDevice->interface))->Release (pDevice->interface);
 		if (kIOReturnSuccess != result)
 			HIDReportErrorNum ("Failed to release IOHIDDeviceInterface.", result);
@@ -238,12 +241,10 @@ static void HIDGetElementInfo (CFTypeRef refElement, recElement *pElement)
 		pElement->cookie = (IOHIDElementCookie) number;
 	refType = CFDictionaryGetValue (refElement, CFSTR(kIOHIDElementMinKey));
 	if (refType && CFNumberGetValue (refType, kCFNumberLongType, &number))
-		pElement->min = number;
-		pElement->maxReport = pElement->min;
+		pElement->minReport = pElement->min = number;
 	refType = CFDictionaryGetValue (refElement, CFSTR(kIOHIDElementMaxKey));
 	if (refType && CFNumberGetValue (refType, kCFNumberLongType, &number))
-		pElement->max = number;
-		pElement->minReport = pElement->max;
+		pElement->maxReport = pElement->max = number;
 /*
 	TODO: maybe should handle the following stuff somehow?
 
@@ -543,7 +544,7 @@ static recDevice *HIDDisposeDevice (recDevice **ppDevice)
 	recDevice *pDeviceNext = NULL;
 	if (*ppDevice)
 	{
-		// save next device prior to disposing of this device
+		/* save next device prior to disposing of this device */
 		pDeviceNext = (*ppDevice)->pNext;
 		
 		/* free element lists */
@@ -569,15 +570,15 @@ static recDevice *HIDDisposeDevice (recDevice **ppDevice)
 int SDL_SYS_JoystickInit(void)
 {
 	IOReturn result = kIOReturnSuccess;
-	mach_port_t masterPort = NULL;
-	io_iterator_t hidObjectIterator = NULL;
+	mach_port_t masterPort = 0;
+	io_iterator_t hidObjectIterator = 0;
 	CFMutableDictionaryRef hidMatchDictionary = NULL;
 	recDevice *device, *lastDevice;
-	io_object_t ioHIDDeviceObject = NULL;
+	io_object_t ioHIDDeviceObject = 0;
 	
 	SDL_numjoysticks = 0;
 	
-	if (NULL != gpDeviceList)
+	if (gpDeviceList)
 	{
 		SDL_SetError("Joystick: Device list already inited.");
 		return -1;
@@ -592,7 +593,7 @@ int SDL_SYS_JoystickInit(void)
 
 	/* Set up a matching dictionary to search I/O Registry by class name for all HID class devices. */
 	hidMatchDictionary = IOServiceMatching (kIOHIDDeviceKey);
-	if ((hidMatchDictionary != NULL))
+	if (hidMatchDictionary)
 	{
 		/* Add key for device type (joystick, in this case) to refine the matching dictionary. */
 		
@@ -621,7 +622,7 @@ int SDL_SYS_JoystickInit(void)
 		SDL_SetError("Joystick: Couldn't create a HID object iterator.");
 		return -1;
 	}
-	if (NULL == hidObjectIterator) /* there are no joysticks */
+	if (!hidObjectIterator) /* there are no joysticks */
 	{
 		gpDeviceList = NULL;
 		SDL_numjoysticks = 0;
@@ -642,13 +643,15 @@ int SDL_SYS_JoystickInit(void)
 
 		/* dump device object, it is no longer needed */
 		result = IOObjectRelease (ioHIDDeviceObject);
-//		if (KERN_SUCCESS != result)
-//			HIDReportErrorNum ("IOObjectRelease error with ioHIDDeviceObject.", result);
+/*		if (KERN_SUCCESS != result)
+			HIDReportErrorNum ("IOObjectRelease error with ioHIDDeviceObject.", result);
+*/
 
 		/* Filter device list to non-keyboard/mouse stuff */ 
 		if ( (device->usagePage != kHIDPage_GenericDesktop) ||
 		     ((device->usage != kHIDUsage_GD_Joystick &&
-		      device->usage != kHIDUsage_GD_GamePad)) ) {
+		      device->usage != kHIDUsage_GD_GamePad &&
+		      device->usage != kHIDUsage_GD_MultiAxisController)) ) {
 
 			/* release memory for the device */
 			HIDDisposeDevice (&device);
@@ -720,9 +723,29 @@ void SDL_SYS_JoystickUpdate(SDL_Joystick *joystick)
 {
 	recDevice *device = joystick->hwdata;
 	recElement *element;
-	SInt32 value;
+	SInt32 value, range;
 	int i;
-	
+
+	if (device->removed)  /* device was unplugged; ignore it. */
+	{
+		if (device->uncentered)
+		{
+			device->uncentered = 0;
+
+			/* Tell the app that everything is centered/unpressed... */
+			for (i = 0; i < device->axes; i++)
+				SDL_PrivateJoystickAxis(joystick, i, 0);
+
+			for (i = 0; i < device->buttons; i++)
+				SDL_PrivateJoystickButton(joystick, i, 0);
+
+			for (i = 0; i < device->hats; i++)
+				SDL_PrivateJoystickHat(joystick, i, SDL_HAT_CENTERED);
+		}
+
+		return;
+	}
+
 	element = device->firstAxis;
 	i = 0;
 	while (element)
@@ -753,10 +776,11 @@ void SDL_SYS_JoystickUpdate(SDL_Joystick *joystick)
 	{
 		Uint8 pos = 0;
 
-		value = HIDGetElementValue(device, element);
-		if (element->max == 3) /* 4 position hatswitch - scale up value */
+		range = (element->max - element->min + 1);
+		value = HIDGetElementValue(device, element) - element->min;
+		if (range == 4) /* 4 position hatswitch - scale up value */
 			value *= 2;
-		else if (element->max != 7) /* Neither a 4 nor 8 positions - fall back to default position (centered) */
+		else if (range != 8) /* Neither a 4 nor 8 positions - fall back to default position (centered) */
 			value = -1;
 		switch(value)
 		{
@@ -814,3 +838,5 @@ void SDL_SYS_JoystickQuit(void)
 	while (NULL != gpDeviceList)
 		gpDeviceList = HIDDisposeDevice (&gpDeviceList);
 }
+
+#endif /* SDL_JOYSTICK_IOKIT */

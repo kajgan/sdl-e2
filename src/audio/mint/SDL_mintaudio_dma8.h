@@ -1,6 +1,6 @@
 /*
     SDL - Simple DirectMedia Layer
-    Copyright (C) 1997-2004 Sam Lantinga
+    Copyright (C) 1997-2012 Sam Lantinga
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Library General Public
@@ -19,11 +19,12 @@
     Sam Lantinga
     slouken@libsdl.org
 */
+#include "SDL_config.h"
 
 /*
-	DMA 8bits audio definitions
+	DMA 8bits and Falcon Codec audio definitions
 
-	Patrice Mandin
+	Patrice Mandin, Didier Méquignon
 */
 
 #ifndef _SDL_mintaudio_dma8_h
@@ -57,8 +58,27 @@ struct DMAAUDIO_IO_S {
 
 	unsigned char dummy10[12];
 
-	unsigned char track_select; /* CODEC only */
-	unsigned char mode;
+	unsigned char track_ctrl; /* CODEC only */
+	unsigned char sound_ctrl;
+	unsigned short sound_data;
+	unsigned short sound_mask;
+
+	unsigned char dummy11[10];
+	
+	unsigned short dev_ctrl;
+	unsigned short dest_ctrl;
+	unsigned short sync_div;
+	unsigned char track_rec;
+	unsigned char adderin_input;
+	unsigned char channel_input;
+	unsigned char channel_amplification;
+	unsigned char channel_reduction;
+	
+	unsigned char dummy12[6];
+
+	unsigned char data_direction;
+	unsigned char dummy13;
+	unsigned char dev_data;
 };
 #define DMAAUDIO_IO ((*(volatile struct DMAAUDIO_IO_S *)DMAAUDIO_IO_BASE))
 
