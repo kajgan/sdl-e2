@@ -199,9 +199,9 @@ static SDL_keysym *DirectFB_TranslateKey (DFBInputEvent *ev, SDL_keysym *keysym)
     keysym->sym = ev->key_symbol;
   else if (ev->key_symbol == DIKS_OK)
     keysym->sym = SDLK_RETURN;
-  else if (ev->key_symbol == DISK_TV)
+  else if (ev->key_symbol == DIKS_TV)
     keysym->sym = SDLK_d;
-  else if (ev->key_symbol == DISK_RADIO)
+  else if (ev->key_symbol == DIKS_RADIO)
     keysym->sym = SDLK_c;
   else
     keysym->sym = keymap[ev->key_id - DIKI_UNKNOWN];
